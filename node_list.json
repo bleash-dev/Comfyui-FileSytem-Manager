@@ -1,0 +1,27 @@
+{
+    "custom_nodes": [
+        {
+            "author": "gilons",
+            "title": "ComfyUI File System Manager",
+            "reference": "",
+            "files": [
+                ""
+            ],
+            "install_type": "git-clone",
+            "description": "A comprehensive file system manager for ComfyUI. Browse, create, delete, download files and folders. Includes upload capabilities from various sources like Google Drive, Hugging Face, Civitai, and direct links."
+        }
+    ],
+    "web_extensions": [
+        {
+            "author": "gilons",
+            "title": "ComfyUI File System Manager UI",
+            "reference": "",
+            "files": [
+                ""
+            ],
+            "install_type": "git-clone",
+            "description": "Adds a File System Manager icon and modal interface to ComfyUI for managing files and uploads."
+        }
+    ]
+}
+
