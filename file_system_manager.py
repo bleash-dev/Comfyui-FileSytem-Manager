@@ -29,7 +29,9 @@ class FileSystemManagerAPI:
         # Define allowed directories for security
         self.allowed_directories = {
             'models': self.comfyui_base / 'models',
-            'users': self.comfyui_base / 'users', 
+            'user': self.comfyui_base / 'user', 
+            'input': self.comfyui_base / 'input',
+            'output': self.comfyui_base / 'output',
             'custom_nodes': self.comfyui_base / 'custom_nodes'
         }
         
