@@ -47,3 +47,14 @@ class ProgressTracker:
                 "percentage": 0
             }
             print(f"🔒 CivitAI Access Restricted - Session: {session_id}, Message: {message}")
+
+    @staticmethod
+    def set_cancelled(session_id: str, message: str):
+        """Mark session as cancelled"""
+        if session_id:
+            civitai_progress_store[session_id] = {
+                "status": "cancelled", 
+                "message": message, 
+                "percentage": 0
+            }
+            print(f"🚫 CivitAI Cancelled - Session: {session_id}, Message: {message}")

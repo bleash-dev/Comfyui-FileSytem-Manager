@@ -25,11 +25,18 @@ class HuggingFaceDownloader:
             print("ℹ️ hf_transfer not available. Downloads may be slower. Consider `pip install hf-transfer`.")
             os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "0"
 
-    def download_with_progress(self, repo_id: str, filename: str, token: str = None, progress_callback=None):
+    def download_with_progress(self, repo_id: str, filename: str, token: str = None, progress_callback=None, session_id: str = None):
         """Download a single file with progress tracking"""
+        # Import cancellation flags
+        from ..file_system_manager import download_cancellation_flags
+        
         use_hf_transfer = os.environ.get("HF_HUB_ENABLE_HF_TRANSFER", "0") == "1"
         
         try:
+            # Check for cancellation at the start
+            if session_id and download_cancellation_flags.get(session_id):
+                raise Exception("Download cancelled by user")
+            
             if use_hf_transfer:
                 print("🚀 Using hf_transfer for faster download with progress tracking")
                 try:
@@ -37,26 +44,39 @@ class HuggingFaceDownloader:
                         repo_id=repo_id,
                         filename=filename,
                         token=token,
-                        progress_callback=progress_callback
+                        progress_callback=progress_callback,
+                        session_id=session_id
                     )
                     return temp_file_path
                     
                 except Exception as hf_transfer_error:
+                    # Check if it was cancellation
+                    if session_id and download_cancellation_flags.get(session_id):
+                        raise Exception("Download cancelled by user")
                     print(f"hf_transfer download failed: {hf_transfer_error}. Falling back to custom progress tracking.")
             
             print("📡 Using custom progress tracking for download")
-            return self._download_with_custom_progress(repo_id, filename, token, progress_callback)
+            return self._download_with_custom_progress(repo_id, filename, token, progress_callback, session_id)
                 
         except Exception as e:
+            if "cancelled" in str(e).lower():
+                raise e
             print(f"Download with progress failed: {e}. Falling back to standard hf_hub_download.")
-            return self._fallback_download(repo_id, filename, token)
+            return self._fallback_download(repo_id, filename, token, session_id)
 
-    def _download_with_custom_progress(self, repo_id: str, filename: str, token: str = None, progress_callback=None):
+    def _download_with_custom_progress(self, repo_id: str, filename: str, token: str = None, progress_callback=None, session_id: str = None):
         """Custom progress tracking implementation"""
+        # Import cancellation flags
+        from ..file_system_manager import download_cancellation_flags
+        
         total_size = 0
         actual_download_url = None
 
         try:
+            # Check for cancellation before metadata request
+            if session_id and download_cancellation_flags.get(session_id):
+                raise Exception("Download cancelled by user")
+                
             metadata_url = hf_hub_url(repo_id=repo_id, filename=filename, token=token)
             metadata = get_hf_file_metadata(url=metadata_url, token=token)
             
@@ -74,6 +94,10 @@ class HuggingFaceDownloader:
             session.headers.update({"Authorization": f"Bearer {token}"})
 
         if total_size <= 0: 
+            # Check for cancellation before HEAD request
+            if session_id and download_cancellation_flags.get(session_id):
+                raise Exception("Download cancelled by user")
+                
             head_url_for_fallback = f"{HUGGINGFACE_CO_URL_HOME}/{repo_id}/resolve/main/{filename}"
             if actual_download_url is None: 
                 actual_download_url = head_url_for_fallback
@@ -108,6 +132,12 @@ class HuggingFaceDownloader:
         safe_suffix = f"_{Path(filename).name}"
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=safe_suffix) as temp_file:
+            # Check for cancellation before starting download
+            if session_id and download_cancellation_flags.get(session_id):
+                temp_file.close()
+                Path(temp_file.name).unlink(missing_ok=True)
+                raise Exception("Download cancelled by user")
+                
             response = session.get(actual_download_url, stream=True, timeout=30)
             hf_raise_for_status(response)
             
@@ -124,14 +154,25 @@ class HuggingFaceDownloader:
             last_progress_call = 0
             
             for chunk in response.iter_content(chunk_size=chunk_size):
+                # Check for cancellation on each chunk
+                if session_id and download_cancellation_flags.get(session_id):
+                    temp_file.close()
+                    Path(temp_file.name).unlink(missing_ok=True)
+                    raise Exception("Download cancelled by user")
+                
                 if chunk:
                     temp_file.write(chunk)
                     downloaded += len(chunk)
                     
-                    # Call progress callback more frequently and with debug info
+                    # Call progress callback with cancellation check
                     if progress_callback:
                         print(f"📊 Download progress: {self.utils.format_file_size(downloaded)} / {self.utils.format_file_size(total_size)} ({downloaded}/{total_size} bytes)")
-                        progress_callback(downloaded, total_size)
+                        # Progress callback should return False to signal cancellation
+                        continue_download = progress_callback(downloaded, total_size)
+                        if continue_download is False:
+                            temp_file.close()
+                            Path(temp_file.name).unlink(missing_ok=True)
+                            raise Exception("Download cancelled by user")
                         last_progress_call = downloaded
             
             # Ensure final progress call
@@ -143,20 +184,35 @@ class HuggingFaceDownloader:
         
         return temp_file_path
 
-    def _download_with_hf_transfer_progress(self, repo_id: str, filename: str, token: str = None, progress_callback=None):
+    def _download_with_hf_transfer_progress(self, repo_id: str, filename: str, token: str = None, progress_callback=None, session_id: str = None):
         """Download using hf_transfer with progress tracking via subprocess output capture"""
+        # Import cancellation flags
+        from ..file_system_manager import download_cancellation_flags
+        
         safe_suffix = f"_{Path(filename).name}"
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=safe_suffix)
         temp_file_path = temp_file.name
         temp_file.close()
         
         try:
+            # Check for cancellation before starting
+            if session_id and download_cancellation_flags.get(session_id):
+                Path(temp_file_path).unlink(missing_ok=True)
+                raise Exception("Download cancelled by user")
+                
             cached_path = self._run_hf_download_with_progress_capture(
                 repo_id=repo_id,
                 filename=filename,
                 token=token,
-                progress_callback=progress_callback
+                progress_callback=progress_callback,
+                session_id=session_id
             )
+            
+            # Check for cancellation after download
+            if session_id and download_cancellation_flags.get(session_id):
+                self.utils.cleanup_cache_file(cached_path)
+                Path(temp_file_path).unlink(missing_ok=True)
+                raise Exception("Download cancelled by user")
             
             if os.path.exists(cached_path):
                 shutil.copy2(cached_path, temp_file_path)
@@ -172,8 +228,11 @@ class HuggingFaceDownloader:
                 pass
             raise e
 
-    def _run_hf_download_with_progress_capture(self, repo_id: str, filename: str, token: str = None, progress_callback=None):
+    def _run_hf_download_with_progress_capture(self, repo_id: str, filename: str, token: str = None, progress_callback=None, session_id: str = None):
         """Run hf_hub_download in a subprocess to capture hf_transfer output"""
+        # Import cancellation flags
+        from ..file_system_manager import download_cancellation_flags
+        
         download_script = f'''
 import os
 import sys
@@ -210,6 +269,16 @@ except Exception as e:
             nonlocal downloaded_path, total_size, current_size
             
             for line in iter(process.stdout.readline, ''):
+                # Check for cancellation during progress tracking
+                if session_id and download_cancellation_flags.get(session_id):
+                    print("🚫 Cancellation detected, terminating subprocess")
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    raise Exception("Download cancelled by user")
+                
                 line = line.strip()
                 if not line:
                     continue
@@ -219,7 +288,10 @@ except Exception as e:
                 if "DOWNLOAD_COMPLETE:" in line:
                     downloaded_path = line.split("DOWNLOAD_COMPLETE:", 1)[1]
                     if progress_callback:
-                        progress_callback(current_size or total_size, total_size or current_size)
+                        continue_download = progress_callback(current_size or total_size, total_size or current_size)
+                        if continue_download is False:
+                            process.terminate()
+                            raise Exception("Download cancelled by user")
                     break
                 elif "DOWNLOAD_ERROR:" in line:
                     error_msg = line.split("DOWNLOAD_ERROR:", 1)[1]
@@ -233,7 +305,10 @@ except Exception as e:
                             current_size = progress_info['current_size']
                         
                         if progress_callback and total_size > 0:
-                            progress_callback(current_size, total_size)
+                            continue_download = progress_callback(current_size, total_size)
+                            if continue_download is False:
+                                process.terminate()
+                                raise Exception("Download cancelled by user")
         
         progress_thread = threading.Thread(target=track_progress)
         progress_thread.daemon = True
@@ -250,57 +325,26 @@ except Exception as e:
             
         return downloaded_path
 
-    def _parse_hf_transfer_output(self, line: str) -> dict:
-        """Parse hf_transfer progress output to extract download information"""
-        progress_info = {}
-        
-        try:
-            tqdm_pattern = r'(\d+)%\|[^|]*\|\s*([0-9.]+)([KMGT]?)B?/([0-9.]+)([KMGT]?)B?'
-            match = re.search(tqdm_pattern, line)
-            
-            if match:
-                percentage = int(match.group(1))
-                current_value = float(match.group(2))
-                current_unit = match.group(3) or 'B'
-                total_value = float(match.group(4))
-                total_unit = match.group(5) or 'B'
-                
-                current_size = self.utils.convert_size_to_bytes(current_value, current_unit)
-                total_size = self.utils.convert_size_to_bytes(total_value, total_unit)
-                
-                progress_info = {
-                    'percentage': percentage,
-                    'current_size': current_size,
-                    'total_size': total_size
-                }
-                
-                print(f"Parsed progress: {percentage}% ({self.utils.format_file_size(current_size)}/{self.utils.format_file_size(total_size)})")
-                
-            elif "downloading" in line.lower() and ("MB" in line or "GB" in line or "KB" in line):
-                size_pattern = r'([0-9.]+)\s*([KMGT]?)B'
-                sizes = re.findall(size_pattern, line)
-                if len(sizes) >= 2:
-                    current_value, current_unit = float(sizes[0][0]), sizes[0][1] or 'B'
-                    total_value, total_unit = float(sizes[1][0]), sizes[1][1] or 'B'
-                    
-                    progress_info = {
-                        'current_size': self.utils.convert_size_to_bytes(current_value, current_unit),
-                        'total_size': self.utils.convert_size_to_bytes(total_value, total_unit)
-                    }
-                    
-        except Exception as e:
-            print(f"Error parsing hf_transfer output: {e}")
-            
-        return progress_info
-
-    def _fallback_download(self, repo_id: str, filename: str, token: str = None):
+    def _fallback_download(self, repo_id: str, filename: str, token: str = None, session_id: str = None):
         """Final fallback to standard hf_hub_download"""
+        # Import cancellation flags
+        from ..file_system_manager import download_cancellation_flags
+        
+        # Check for cancellation before fallback
+        if session_id and download_cancellation_flags.get(session_id):
+            raise Exception("Download cancelled by user")
+        
         cached_path = hf_hub_download(
             repo_id=repo_id,
             filename=filename,
             token=token,
             local_dir_use_symlinks=False
         )
+        
+        # Check for cancellation after download
+        if session_id and download_cancellation_flags.get(session_id):
+            self.utils.cleanup_cache_file(cached_path)
+            raise Exception("Download cancelled by user")
         
         safe_fallback_suffix = f"_{Path(filename).name}"
         if os.path.islink(cached_path):
@@ -337,9 +381,15 @@ except Exception as e:
         return await self._snapshot_download_fallback_async(repo_id, token, progress_callback)
 
     async def _snapshot_download_with_hf_transfer_progress_async(self, repo_id: str, token: str = None, progress_callback=None):
-        """Async version of hf_transfer repository download with file size-based progress tracking"""
+        """Async version of hf_transfer repository download with cancellation support"""
         import asyncio
         import time
+        
+        # Import cancellation flags
+        from ..file_system_manager import download_cancellation_flags
+        
+        # Get session_id from progress_callback context if available
+        session_id = getattr(progress_callback, 'session_id', None) if hasattr(progress_callback, 'session_id') else None
         
         # Properly handle token for subprocess script
         token_arg = f'"{token}"' if token else "None"
@@ -391,6 +441,16 @@ except Exception as e:
             
             while process.returncode is None:
                 try:
+                    # Check for cancellation
+                    if session_id and download_cancellation_flags.get(session_id):
+                        print("🚫 Repository download cancelled, terminating process")
+                        process.terminate()
+                        try:
+                            await asyncio.wait_for(process.wait(), timeout=5.0)
+                        except asyncio.TimeoutError:
+                            process.kill()
+                        raise asyncio.CancelledError("Download cancelled by user")
+                    
                     current_time = time.time()
                     current_size = 0
                     
@@ -426,6 +486,8 @@ except Exception as e:
                         print("⚠️ Download timeout reached")
                         break
                         
+                except asyncio.CancelledError:
+                    raise
                 except Exception as e:
                     print(f"⚠️ Error monitoring download progress: {e}")
                     await asyncio.sleep(1.0)
@@ -502,6 +564,21 @@ except Exception as e:
             
             return downloaded_path
             
+        except asyncio.CancelledError:
+            # Cancel monitoring tasks
+            progress_task.cancel()
+            output_task.cancel()
+            
+            # Ensure process is terminated
+            if process.returncode is None:
+                process.kill()
+                try:
+                    await process.wait()
+                except:
+                    pass
+            
+            print(f"Repository download cancelled")
+            raise
         except Exception as e:
             # Cancel monitoring tasks
             progress_task.cancel()
@@ -559,6 +636,12 @@ except Exception as e:
             
             while not download_completed.is_set():
                 try:
+                    # Check for cancellation
+                    if session_id and download_cancellation_flags.get(session_id):
+                        print("🚫 Repository download cancelled, terminating task")
+                        download_completed.set()
+                        return
+                    
                     current_time = time.time()
                     current_size = 0
                     

@@ -574,3 +574,48 @@ async def get_civitai_progress_endpoint(request):
             {"status": "error", "message": str(e), "percentage": 0},
             status=500
         )
+
+# Global cancellation tracking
+download_cancellation_flags = {}
+
+@server.PromptServer.instance.routes.post("/filesystem/cancel_download")
+async def cancel_download_endpoint(request):
+    """API endpoint for cancelling downloads"""
+    try:
+        data = await request.json()
+        session_id = data.get('session_id')
+        download_type = data.get('download_type')
+        
+        if not session_id:
+            return web.json_response({'success': False, 'error': 'Session ID not provided'}, status=400)
+        
+        # Set cancellation flag
+        download_cancellation_flags[session_id] = True
+        
+        # Update progress stores to indicate cancellation
+        if download_type == 'google-drive':
+            gdrive_progress_store[session_id] = {
+                "status": "cancelled",
+                "message": "Download cancelled by user",
+                "percentage": 0
+            }
+        elif download_type == 'huggingface':
+            hf_progress_store[session_id] = {
+                "status": "cancelled", 
+                "message": "Download cancelled by user",
+                "percentage": 0
+            }
+        elif download_type == 'civitai':
+            civitai_progress_store[session_id] = {
+                "status": "cancelled",
+                "message": "Download cancelled by user", 
+                "percentage": 0
+            }
+        
+        print(f"🚫 Download cancellation requested for session: {session_id} (type: {download_type})")
+        
+        return web.json_response({'success': True, 'message': 'Cancellation requested'})
+        
+    except Exception as e:
+        print(f"Error in /filesystem/cancel_download: {e}")
+        return web.json_response({'success': False, 'error': str(e)}, status=500)

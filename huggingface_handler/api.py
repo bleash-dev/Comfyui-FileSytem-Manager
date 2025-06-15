@@ -19,17 +19,30 @@ class HuggingFaceDownloadAPI:
         
         loop = asyncio.get_event_loop()
         
+        # Import cancellation flags
+        from ..file_system_manager import download_cancellation_flags
+        
         # Use user-provided token if available, otherwise fall back to environment token
         import os
         token_to_use = user_token or os.environ.get("HF_TOKEN")
 
         try:
+            # Check for cancellation at the start
+            if session_id and download_cancellation_flags.get(session_id):
+                ProgressTracker.set_cancelled(session_id, "Download cancelled by user")
+                return {"success": False, "error": "Download cancelled by user"}
+                
             ProgressTracker.update_progress(session_id, "Parsing Hugging Face URL...", 5)
             
             parsed_url = self.utils.parse_hf_url(hf_url)
             repo_id = parsed_url["repo_id"]
             filename_in_repo = parsed_url["filename"]
             is_file_url = parsed_url["is_file_url"]
+
+            # Check for cancellation
+            if session_id and download_cancellation_flags.get(session_id):
+                ProgressTracker.set_cancelled(session_id, "Download cancelled by user")
+                return {"success": False, "error": "Download cancelled by user"}
 
             ProgressTracker.update_progress(session_id, f"Repo: {repo_id}, File: {filename_in_repo or 'All'}", 10)
 
@@ -53,7 +66,7 @@ class HuggingFaceDownloadAPI:
                 print(f"ℹ️ Using {token_source} HF_TOKEN for Hugging Face authentication.")
 
             if is_file_url:
-                # Download a single file
+                # Download a single file with cancellation support
                 ProgressTracker.update_progress(session_id, f"Starting download of file: {filename_in_repo}", 75)
                 
                 final_file_path_abs = fsm_target_dir_abs / Path(filename_in_repo).name
@@ -63,6 +76,10 @@ class HuggingFaceDownloadAPI:
                     return {"success": True, "message": "File already exists.", "path": str(final_file_path_abs)}
 
                 def hf_download_progress_callback(current_size, total_size):
+                    # Check for cancellation in progress callback
+                    if session_id and download_cancellation_flags.get(session_id):
+                        return False  # Signal to stop download
+                        
                     is_total_size_reliable = total_size > 1024
 
                     if is_total_size_reliable:
@@ -90,6 +107,8 @@ class HuggingFaceDownloadAPI:
                             ProgressTracker.update_progress(session_id, message, percentage)
                     else:
                         ProgressTracker.update_progress(session_id, message, percentage)
+                    
+                    return True  # Continue download
 
                 try:
                     temp_file_path = await loop.run_in_executor(
@@ -98,10 +117,16 @@ class HuggingFaceDownloadAPI:
                             repo_id=repo_id,
                             filename=filename_in_repo,
                             token=token_to_use,
-                            progress_callback=hf_download_progress_callback
+                            progress_callback=hf_download_progress_callback,
+                            session_id=session_id  # Pass session_id for cancellation checks
                         )
                     )
                 except Exception as download_error:
+                    # Check if it was cancelled
+                    if session_id and download_cancellation_flags.get(session_id):
+                        ProgressTracker.set_cancelled(session_id, "Download cancelled by user")
+                        return {"success": False, "error": "Download cancelled by user"}
+                        
                     error_str = str(download_error).lower()
                     if "403" in error_str or "forbidden" in error_str or "access" in error_str:
                         if user_token:
@@ -113,6 +138,14 @@ class HuggingFaceDownloadAPI:
                         return {"success": False, "error": error_msg, "error_type": "access_restricted"}
                     else:
                         raise download_error
+
+                # Check for cancellation before moving file
+                if session_id and download_cancellation_flags.get(session_id):
+                    # Clean up temp file
+                    if temp_file_path and Path(temp_file_path).exists():
+                        Path(temp_file_path).unlink()
+                    ProgressTracker.set_cancelled(session_id, "Download cancelled by user")
+                    return {"success": False, "error": "Download cancelled by user"}
 
                 ProgressTracker.update_progress(session_id, f"File downloaded, moving to final location...", 90)
 
@@ -202,6 +235,11 @@ class HuggingFaceDownloadAPI:
 
                 total_items = list(repo_snapshot_cache_path.iterdir())
                 for i, item_in_cache in enumerate(total_items):
+                    # Check for cancellation during file copying
+                    if session_id and download_cancellation_flags.get(session_id):
+                        ProgressTracker.set_cancelled(session_id, "Download cancelled by user")
+                        return {"success": False, "error": "Download cancelled by user"}
+                    
                     progress_percent = 90 + int((i / len(total_items)) * 5)
                     ProgressTracker.update_progress(session_id, f"Copying {item_in_cache.name} to {repo_name} ({i+1}/{len(total_items)})", progress_percent)
                     
@@ -234,3 +272,7 @@ class HuggingFaceDownloadAPI:
             error_msg = f"An unexpected error occurred: {str(e)}"
             ProgressTracker.set_error(session_id, error_msg)
             return {"success": False, "error": error_msg}
+        finally:
+            # Clean up cancellation flag
+            if session_id and session_id in download_cancellation_flags:
+                del download_cancellation_flags[session_id]

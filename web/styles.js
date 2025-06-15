@@ -610,28 +610,39 @@ style.textContent = `
     background-color: var(--comfy-input-bg);
     border: 1px solid var(--border-color);
     border-radius: 5px;
+    position: relative; /* For cancel button positioning */
 }
 
-.fs-upload-progress-text {
-    margin-bottom: 8px;
-    color: var(--input-text);
-    font-size: 13px; /* Slightly smaller text */
-    line-height: 1.4;
+.fs-upload-progress:hover .fs-upload-cancel-btn {
+    opacity: 1;
+    visibility: visible;
 }
 
-.fs-upload-progress-bar {
-    width: 100%;
-    height: 6px; /* Reduced height */
-    background-color: var(--border-color);
-    border-radius: 3px;
-    overflow: hidden;
+.fs-upload-cancel-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 20px;
+    height: 20px;
+    border: none;
+    border-radius: 50%;
+    background-color: #dc3545;
+    color: white;
+    font-size: 14px;
+    font-weight: bold;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.2s ease, visibility 0.2s ease;
+    z-index: 10;
 }
 
-.fs-upload-progress-fill {
-    height: 100%;
-    background-color: #007bff;
-    width: 0%;
-    transition: width 0.2s ease-in-out;
+.fs-upload-cancel-btn:hover {
+    background-color: #a71e2a;
+    transform: scale(1.1);
 }
 
 /* Message styling improvements */

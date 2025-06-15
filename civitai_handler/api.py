@@ -13,10 +13,23 @@ class CivitAIDownloadAPI:
                                    session_id: str = None, user_token: str = None):
         """Download a model from CivitAI with progress tracking"""
         try:
+            # Import cancellation flags
+            from ..file_system_manager import download_cancellation_flags
+            
+            # Check for cancellation at the start
+            if session_id and download_cancellation_flags.get(session_id):
+                ProgressTracker.set_cancelled(session_id, "Download cancelled by user")
+                return {"success": False, "error": "Download cancelled by user"}
+                
             ProgressTracker.update_progress(session_id, "Parsing CivitAI URL...", 5)
             
             # Parse the URL to extract model and version IDs
             parsed_url = self.utils.parse_civitai_url(civitai_url)
+            
+            # Check for cancellation
+            if session_id and download_cancellation_flags.get(session_id):
+                ProgressTracker.set_cancelled(session_id, "Download cancelled by user")
+                return {"success": False, "error": "Download cancelled by user"}
             
             # Use environment token by default, user token only if provided
             import os
@@ -43,7 +56,7 @@ class CivitAIDownloadAPI:
                     10
                 )
                 
-                # Download using direct URL
+                # Download using direct URL with cancellation support
                 result = await self.downloader.download_model_async(
                     model_id=None,  # Not needed for direct downloads
                     version_id=version_id,
@@ -56,7 +69,7 @@ class CivitAIDownloadAPI:
                 
                 return result
             else:
-                # Handle regular model/version URLs
+                # Handle regular model/version URLs with cancellation support
                 model_id = parsed_url["model_id"]
                 version_id = parsed_url["version_id"]
                 
@@ -66,7 +79,7 @@ class CivitAIDownloadAPI:
                     10
                 )
                 
-                # Download the model
+                # Download the model with cancellation support
                 result = await self.downloader.download_model_async(
                     model_id=model_id,
                     version_id=version_id,
@@ -86,3 +99,7 @@ class CivitAIDownloadAPI:
             error_msg = f"An unexpected error occurred: {str(e)}"
             ProgressTracker.set_error(session_id, error_msg)
             return {"success": False, "error": error_msg}
+        finally:
+            # Clean up cancellation flag
+            if session_id and session_id in download_cancellation_flags:
+                del download_cancellation_flags[session_id]

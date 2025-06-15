@@ -172,8 +172,16 @@ class GoogleDriveDownloaderAPI:
     async def download_file_async(self, google_drive_url, filename, model_type, custom_path="", overwrite=False, auto_extract_zip=True, progress_callback=None, session_id=None):
         """Async version of download_file with progress callbacks"""
         try:
+            # Import cancellation flags
+            from .file_system_manager import download_cancellation_flags
+            
             if session_id:
                 progress_store[session_id] = {"status": "starting", "message": "Extracting file ID...", "percentage": 0}
+            
+            # Check for cancellation
+            if session_id and download_cancellation_flags.get(session_id):
+                progress_store[session_id] = {"status": "cancelled", "message": "Download cancelled by user", "percentage": 0}
+                return {"success": False, "error": "Download cancelled by user"}
             
             if progress_callback:
                 progress_callback("Extracting file ID...")
@@ -184,6 +192,11 @@ class GoogleDriveDownloaderAPI:
             if session_id:
                 progress_store[session_id] = {"status": "progress", "message": f"File ID extracted: {file_id}", "percentage": 10}
             
+            # Check for cancellation
+            if session_id and download_cancellation_flags.get(session_id):
+                progress_store[session_id] = {"status": "cancelled", "message": "Download cancelled by user", "percentage": 0}
+                return {"success": False, "error": "Download cancelled by user"}
+            
             final_download_path = self.get_download_path(model_type, custom_path, filename)
             
             if final_download_path.exists() and not overwrite:
@@ -193,8 +206,12 @@ class GoogleDriveDownloaderAPI:
                     progress_callback("File already exists!")
                 return {"success": True, "file_path": str(final_download_path), "message": "File already exists"}
             
-            # Create progress callback that updates both local callback and session store
+            # Create progress callback that updates both local callback and session store and checks cancellation
             def combined_progress_callback(message, percentage=None):
+                # Check for cancellation before updating progress
+                if session_id and download_cancellation_flags.get(session_id):
+                    return False  # Signal cancellation
+                
                 if session_id:
                     update_data = {"status": "progress", "message": message}
                     if percentage is not None:
@@ -202,12 +219,23 @@ class GoogleDriveDownloaderAPI:
                     progress_store[session_id] = update_data
                 if progress_callback:
                     progress_callback(message)
+                return True  # Continue download
             
             # Download using Playwright
-            combined_progress_callback("Starting download...", 15)
+            if not combined_progress_callback("Starting download...", 15):
+                return {"success": False, "error": "Download cancelled by user"}
+                
             success, suggested_filename, temp_download_path = await self.download_with_playwright(
-                file_id, final_download_path, combined_progress_callback
+                file_id, final_download_path, combined_progress_callback, session_id
             )
+            
+            # Check for cancellation after download
+            if session_id and download_cancellation_flags.get(session_id):
+                # Clean up temp file
+                if temp_download_path and temp_download_path.exists():
+                    temp_download_path.unlink()
+                progress_store[session_id] = {"status": "cancelled", "message": "Download cancelled by user", "percentage": 0}
+                return {"success": False, "error": "Download cancelled by user"}
             
             if not success or not temp_download_path.exists():
                 if session_id:
@@ -297,9 +325,16 @@ class GoogleDriveDownloaderAPI:
             if progress_callback:
                 progress_callback(error_message)
             return {"success": False, "error": str(e)}
+        finally:
+            # Clean up cancellation flag
+            if session_id and session_id in download_cancellation_flags:
+                del download_cancellation_flags[session_id]
 
-    async def download_with_playwright(self, file_id, download_path, progress_callback=None):
-        """Download file using Playwright with progress callbacks"""
+    async def download_with_playwright(self, file_id, download_path, progress_callback=None, session_id=None):
+        """Download file using Playwright with progress callbacks and cancellation support"""
+        # Import cancellation flags
+        from .file_system_manager import download_cancellation_flags
+        
         download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
         
         # Use temporary file for potential zip downloads
@@ -307,7 +342,12 @@ class GoogleDriveDownloaderAPI:
         temp_download_path = temp_dir / f"gdrive_temp_{file_id}.tmp"
         
         if progress_callback:
-            progress_callback("Starting download...", 20)
+            if not progress_callback("Starting download...", 20):
+                return False, None, None
+        
+        # Check for cancellation before starting browser
+        if session_id and download_cancellation_flags.get(session_id):
+            return False, None, None
         
         async with async_playwright() as p:
             browser = await p.chromium.launch(
@@ -325,16 +365,32 @@ class GoogleDriveDownloaderAPI:
                 download_info = {"path": None, "completed": False, "filename": None}
                 
                 async def handle_download(download):
+                    # Check cancellation before starting actual download
+                    if session_id and download_cancellation_flags.get(session_id):
+                        await download.cancel()
+                        return
+                        
                     if progress_callback:
-                        progress_callback("Download started...", 30)
-                    await download.save_as(temp_download_path)
-                    download_info["path"] = temp_download_path
-                    download_info["filename"] = download.suggested_filename
-                    download_info["completed"] = True
-                    if progress_callback:
-                        progress_callback("Download completed!", 65)
+                        if not progress_callback("Download started...", 30):
+                            await download.cancel()
+                            return
+                    
+                    try:
+                        await download.save_as(temp_download_path)
+                        download_info["path"] = temp_download_path
+                        download_info["filename"] = download.suggested_filename
+                        download_info["completed"] = True
+                        if progress_callback:
+                            progress_callback("Download completed!", 65)
+                    except Exception as e:
+                        if "cancel" not in str(e).lower():
+                            print(f"Download error: {e}")
                 
                 page.on("download", handle_download)
+                
+                # Check cancellation before navigation
+                if session_id and download_cancellation_flags.get(session_id):
+                    return False, None, None
                 
                 if progress_callback:
                     progress_callback("Connecting to Google Drive...", 25)
@@ -343,6 +399,10 @@ class GoogleDriveDownloaderAPI:
                 
                 # Handle different Google Drive download scenarios
                 if not download_info["completed"]:
+                    # Check for cancellation during page interactions
+                    if session_id and download_cancellation_flags.get(session_id):
+                        return False, None, None
+                        
                     if progress_callback:
                         progress_callback("Looking for download button...", 35)
                     
@@ -361,28 +421,47 @@ class GoogleDriveDownloaderAPI:
                         ]
                         
                         for selector in selectors:
+                            # Check for cancellation in loop
+                            if session_id and download_cancellation_flags.get(session_id):
+                                return False, None, None
+                                
                             element = page.locator(selector)
                             if await element.count() > 0:
                                 await element.click()
                                 break
                 
-                # Wait for download to complete
+                # Wait for download to complete with cancellation checks
                 timeout = 60000  # 60 seconds for large files
                 elapsed = 0
                 while not download_info["completed"] and elapsed < timeout:
+                    # Check for cancellation during wait
+                    if session_id and download_cancellation_flags.get(session_id):
+                        return False, None, None
+                    
                     await page.wait_for_timeout(1000)
                     elapsed += 1000
                     if progress_callback and elapsed % 5000 == 0:
                         percentage = min(35 + (elapsed / timeout) * 30, 65)  # Progress from 35% to 65%
-                        progress_callback(f"Waiting for download... ({elapsed//1000}s)", percentage)
+                        continue_download = progress_callback(f"Waiting for download... ({elapsed//1000}s)", percentage)
+                        if continue_download is False:
+                            return False, None, None
                 
                 if not download_info["completed"]:
+                    # Check for cancellation before fallback
+                    if session_id and download_cancellation_flags.get(session_id):
+                        return False, None, None
+                        
                     if progress_callback:
                         progress_callback("Trying direct download...", 40)
                     # Fallback: try to get file content directly
                     response = await page.goto(download_url)
                     if response and response.status == 200:
                         content = await response.body()
+                        
+                        # Check for cancellation before writing file
+                        if session_id and download_cancellation_flags.get(session_id):
+                            return False, None, None
+                        
                         async with aiofiles.open(temp_download_path, 'wb') as f:
                             await f.write(content)
                         download_info["completed"] = True

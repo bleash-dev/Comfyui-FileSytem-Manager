@@ -132,6 +132,79 @@ export class FileSystemManager {
         modal.querySelector('#fs-upload-start').addEventListener('click', () => this.startUpload());
         modal.querySelector('#fs-upload-cancel').addEventListener('click', () => this.closeUploadModal());
         
+        // Listen for cancel events from progress bar
+        modal.addEventListener('uploadCancel', () => this.cancelUpload());
+        
+        // Close on backdrop click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                this.closeUploadModal();
+            }
+        });
+    }
+
+    closeUploadModal() {
+        if (this.uploadModal) {
+            document.body.removeChild(this.uploadModal);
+            this.uploadModal = null;
+        }
+        this.stopUploadProgressPolling();
+    }
+
+    setUploadButtonState(enabled) {
+        if (this.uploadModal) {
+            const uploadButton = this.uploadModal.querySelector('#fs-upload-start');
+            if (uploadButton) {
+                uploadButton.disabled = !enabled;
+            }
+        }
+    }
+
+    handleUploadFormInputChange() {
+        this.setUploadButtonState(true);
+    }
+
+    setupUploadEventListeners(modal) {
+        // Close upload modal
+        modal.querySelector('#fs-upload-close').addEventListener('click', () => this.closeUploadModal());
+        
+        // Upload option selection
+        modal.querySelectorAll('.fs-upload-option').forEach(option => {
+            option.addEventListener('click', () => {
+                const type = option.dataset.type;
+                this.currentUploadType = type; // Ensure currentUploadType is set
+                let destinationPathText = this.currentPath || "FSM Root"; // Default to current browsed path
+
+                if (this.selectedItems.size === 1) {
+                    const selectedPath = Array.from(this.selectedItems)[0];
+                    const selectedItem = this.currentContents.find(item => item.path === selectedPath);
+                    if (selectedItem && selectedItem.type === 'directory') {
+                        destinationPathText = selectedItem.path; // Target the selected directory
+                    }
+                }
+                // Store this for startUpload
+                this.currentUploadDestinationPath = destinationPathText === "FSM Root" ? "" : destinationPathText;
+
+
+                UIComponents.showUploadForm(modal, type, destinationPathText);
+                this.setUploadButtonState(true); // Enable button when form is shown
+                this.attachUploadFormInputListeners(modal);
+            });
+        });
+        
+        // Back button
+        modal.querySelector('#fs-upload-back').addEventListener('click', () => {
+            UIComponents.showUploadOptions(modal);
+            // No need to change button state here, as options view doesn't have it
+        });
+        
+        // Upload actions
+        modal.querySelector('#fs-upload-start').addEventListener('click', () => this.startUpload());
+        modal.querySelector('#fs-upload-cancel').addEventListener('click', () => this.closeUploadModal());
+        
+        // Listen for cancel events from progress bar
+        modal.addEventListener('uploadCancel', () => this.cancelUpload());
+        
         // Close on backdrop click
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {
@@ -911,6 +984,42 @@ export class FileSystemManager {
         }
     }
 
+    async cancelUpload() {
+        if (!this.currentUploadSessionId) return;
+        
+        try {
+            UIComponents.showUploadMessage(this.uploadModal, 'Cancelling download...', false);
+            
+            // Send cancellation request to the server
+            const response = await api.fetchApi('/filesystem/cancel_download', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    session_id: this.currentUploadSessionId,
+                    download_type: this.currentUploadType
+                })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                UIComponents.showUploadMessage(this.uploadModal, 'Download cancelled successfully', false);
+            } else {
+                UIComponents.showUploadMessage(this.uploadModal, `Failed to cancel: ${result.error}`, true);
+            }
+            
+        } catch (error) {
+            UIComponents.showUploadMessage(this.uploadModal, `Error cancelling download: ${error.message}`, true);
+        }
+        
+        // Stop progress polling and reset state
+        this.stopUploadProgressPolling();
+        UIComponents.hideUploadProgress(this.uploadModal);
+        this.setUploadButtonState(true);
+    }
+
     startUploadProgressPolling(sessionId, uploadType) {
         if (this.uploadProgressInterval) {
             clearInterval(this.uploadProgressInterval);
@@ -938,13 +1047,16 @@ export class FileSystemManager {
 
                 UIComponents.showUploadProgress(this.uploadModal, progress.message, progress.percentage);
 
-                if (progress.status === 'completed' || progress.status === 'error' || progress.status === 'access_restricted') {
+                if (progress.status === 'completed' || progress.status === 'error' || progress.status === 'access_restricted' || progress.status === 'cancelled') {
                     this.stopUploadProgressPolling();
                     
                     if (progress.status === 'completed') {
                         UIComponents.showUploadMessage(this.uploadModal, `✅ ${progress.message}`, false);
                         this.setUploadButtonState(false); // Disable button on successful completion
                         await this.refreshCurrentDirectory();
+                    } else if (progress.status === 'cancelled') {
+                        UIComponents.showUploadMessage(this.uploadModal, `🚫 ${progress.message}`, false);
+                        this.setUploadButtonState(true); // Re-enable button after cancellation
                     } else if (progress.status === 'access_restricted') {
                         // Show access restricted message with HTML support and show token input
                         UIComponents.showUploadMessage(this.uploadModal, progress.message, true, true);

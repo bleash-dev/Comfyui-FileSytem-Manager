@@ -510,6 +510,21 @@ export class UIComponents {
             }
             textElement.textContent = displayMessage;
             fillElement.style.width = `${percentage}%`;
+            
+            // Add cancel button if it doesn't exist
+            let cancelButton = progressContainer.querySelector('.fs-upload-cancel-btn');
+            if (!cancelButton) {
+                cancelButton = document.createElement('button');
+                cancelButton.className = 'fs-upload-cancel-btn';
+                cancelButton.innerHTML = '×';
+                cancelButton.title = 'Cancel Download';
+                cancelButton.addEventListener('click', () => {
+                    // Trigger cancel event that FileSystemManager will listen to
+                    const cancelEvent = new CustomEvent('uploadCancel');
+                    modal.dispatchEvent(cancelEvent);
+                });
+                progressContainer.appendChild(cancelButton);
+            }
         }
     }
 
@@ -519,6 +534,12 @@ export class UIComponents {
             progressContainer.style.display = 'none';
             modal.querySelector('.fs-upload-progress-text').textContent = '';
             modal.querySelector('.fs-upload-progress-fill').style.width = '0%';
+            
+            // Remove cancel button
+            const cancelButton = progressContainer.querySelector('.fs-upload-cancel-btn');
+            if (cancelButton) {
+                cancelButton.remove();
+            }
         }
     }
 

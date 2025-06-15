@@ -82,6 +82,9 @@ class CivitAIDownloader:
     async def download_with_progress(self, download_url: str, target_path: str, filename: str, 
                                    session_id: str = None, token: str = None, progress_callback=None):
         """Download file with real-time progress tracking"""
+        # Import cancellation flags
+        from ..file_system_manager import download_cancellation_flags
+        
         # Add token as query parameter to download URL if provided
         final_download_url = download_url
         if token:
@@ -92,6 +95,10 @@ class CivitAIDownloader:
         timeout = aiohttp.ClientTimeout(total=3600, connect=30)  # 1 hour total, 30s connect
         
         async with aiohttp.ClientSession(timeout=timeout) as session:
+            # Check for cancellation before starting request
+            if session_id and download_cancellation_flags.get(session_id):
+                raise asyncio.CancelledError("Download cancelled by user")
+                
             async with session.get(final_download_url) as response:
                 if response.status == 401:
                     raise ValueError("Invalid CivitAI API token or authentication required")
@@ -115,6 +122,16 @@ class CivitAIDownloader:
                     chunk_size = 1024 * 1024  # 1MB chunks for better performance
                     
                     async for chunk in response.content.iter_chunked(chunk_size):
+                        # Check for cancellation on each chunk
+                        if session_id and download_cancellation_flags.get(session_id):
+                            # Clean up partial file
+                            try:
+                                await file.close()
+                                Path(target_path).unlink(missing_ok=True)
+                            except:
+                                pass
+                            raise asyncio.CancelledError("Download cancelled by user")
+                        
                         await file.write(chunk)
                         downloaded += len(chunk)
                         
@@ -139,9 +156,17 @@ class CivitAIDownloader:
                                  target_fsm_path: str = None, filename: str = None,
                                  token: str = None, session_id: str = None, direct_download_url: str = None):
         """Download a model from CivitAI with progress tracking"""
+        # Import cancellation flags
+        from ..file_system_manager import download_cancellation_flags
+        
         try:
             # Handle direct download URLs
             if direct_download_url:
+                # Check for cancellation at the start
+                if session_id and download_cancellation_flags.get(session_id):
+                    ProgressTracker.set_cancelled(session_id, "Download cancelled by user")
+                    return {"success": False, "error": "Download cancelled by user"}
+                    
                 ProgressTracker.update_progress(session_id, "Using direct download URL...", 10)
                 
                 # Extract filename from URL or use provided filename
@@ -168,6 +193,11 @@ class CivitAIDownloader:
                 
                 final_filename = self.utils.get_safe_filename(filename)
                 final_path = target_dir / final_filename
+                
+                # Check for cancellation before file operations
+                if session_id and download_cancellation_flags.get(session_id):
+                    ProgressTracker.set_cancelled(session_id, "Download cancelled by user")
+                    return {"success": False, "error": "Download cancelled by user"}
                 
                 # Check if file already exists
                 if final_path.exists():
@@ -200,6 +230,13 @@ class CivitAIDownloader:
                         token=token
                     )
                     
+                    # Check for cancellation after download
+                    if session_id and download_cancellation_flags.get(session_id):
+                        # Clean up temp file
+                        self.utils.cleanup_temp_file(temp_path)
+                        ProgressTracker.set_cancelled(session_id, "Download cancelled by user")
+                        return {"success": False, "error": "Download cancelled by user"}
+                    
                     ProgressTracker.update_progress(
                         session_id,
                         f"Download completed, moving to final location...",
@@ -220,16 +257,31 @@ class CivitAIDownloader:
                         "file_size": downloaded_size
                     }
                     
+                except asyncio.CancelledError:
+                    # Handle cancellation during download
+                    self.utils.cleanup_temp_file(temp_path)
+                    ProgressTracker.set_cancelled(session_id, "Download cancelled by user")
+                    return {"success": False, "error": "Download cancelled by user"}
                 except Exception as download_error:
                     # Clean up temp file on error
                     self.utils.cleanup_temp_file(temp_path)
                     raise download_error
             
-            # Original model/version-based download logic
+            # Original model/version-based download logic with cancellation checks
+            if session_id and download_cancellation_flags.get(session_id):
+                ProgressTracker.set_cancelled(session_id, "Download cancelled by user")
+                return {"success": False, "error": "Download cancelled by user"}
+                
             ProgressTracker.update_progress(session_id, "Fetching model information...", 5)
             
             # Get model information
             model_info = await self.get_model_info(model_id, token)
+            
+            # Check for cancellation after API call
+            if session_id and download_cancellation_flags.get(session_id):
+                ProgressTracker.set_cancelled(session_id, "Download cancelled by user")
+                return {"success": False, "error": "Download cancelled by user"}
+                
             model_name = model_info.get('name', f'Model_{model_id}')
             model_type = model_info.get('type', 'Checkpoint')
             
@@ -241,6 +293,11 @@ class CivitAIDownloader:
             
             # Select version
             if version_id:
+                # Check for cancellation before version API call
+                if session_id and download_cancellation_flags.get(session_id):
+                    ProgressTracker.set_cancelled(session_id, "Download cancelled by user")
+                    return {"success": False, "error": "Download cancelled by user"}
+                    
                 # Get specific version
                 ProgressTracker.update_progress(session_id, f"Fetching version {version_id} info...", 15)
                 version_info = await self.get_version_info(version_id, token)
@@ -251,6 +308,11 @@ class CivitAIDownloader:
                     raise ValueError("No versions available for this model")
                 version_info = versions[0]  # First version is usually the latest
                 version_id = str(version_info.get('id'))
+            
+            # Check for cancellation after version selection
+            if session_id and download_cancellation_flags.get(session_id):
+                ProgressTracker.set_cancelled(session_id, "Download cancelled by user")
+                return {"success": False, "error": "Download cancelled by user"}
             
             version_name = version_info.get('name', f'Version_{version_id}')
             ProgressTracker.update_progress(
@@ -277,6 +339,11 @@ class CivitAIDownloader:
                 f"Selected file: {file_name} ({self.utils.format_file_size(file_size)})",
                 25
             )
+            
+            # Check for cancellation before file operations
+            if session_id and download_cancellation_flags.get(session_id):
+                ProgressTracker.set_cancelled(session_id, "Download cancelled by user")
+                return {"success": False, "error": "Download cancelled by user"}
             
             # Determine target path
             if target_fsm_path:
@@ -332,6 +399,13 @@ class CivitAIDownloader:
                     token=token
                 )
                 
+                # Check for cancellation after download
+                if session_id and download_cancellation_flags.get(session_id):
+                    # Clean up temp file
+                    self.utils.cleanup_temp_file(temp_path)
+                    ProgressTracker.set_cancelled(session_id, "Download cancelled by user")
+                    return {"success": False, "error": "Download cancelled by user"}
+                
                 ProgressTracker.update_progress(
                     session_id,
                     f"Download completed, moving to final location...",
@@ -354,11 +428,20 @@ class CivitAIDownloader:
                     "file_size": downloaded_size
                 }
                 
+            except asyncio.CancelledError:
+                # Handle cancellation during download
+                self.utils.cleanup_temp_file(temp_path)
+                ProgressTracker.set_cancelled(session_id, "Download cancelled by user")
+                return {"success": False, "error": "Download cancelled by user"}
             except Exception as download_error:
                 # Clean up temp file on error
                 self.utils.cleanup_temp_file(temp_path)
                 raise download_error
                 
+        except asyncio.CancelledError:
+            # Handle cancellation at any level
+            ProgressTracker.set_cancelled(session_id, "Download cancelled by user")
+            return {"success": False, "error": "Download cancelled by user"}
         except Exception as e:
             error_msg = str(e)
             if "403" in error_msg or "Access denied" in error_msg or "authentication required" in error_msg:
@@ -377,3 +460,7 @@ class CivitAIDownloader:
                     "success": False,
                     "error": error_msg
                 }
+        finally:
+            # Clean up cancellation flag
+            if session_id and session_id in download_cancellation_flags:
+                del download_cancellation_flags[session_id]
