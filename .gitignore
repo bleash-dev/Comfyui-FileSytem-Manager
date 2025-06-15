@@ -61,3 +61,24 @@ Thumbs.db
 # Playwright
 playwright-browsers/
 test-results/
+
+# Screenshots directory
+screenshots/
+*.png
+*.jpg
+*.jpeg
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment files
+.env.local
+.env.development
+.env.production
+
+# Temporary files
+*.tmp
+*.temp
+.DS_Store

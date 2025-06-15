@@ -21,7 +21,7 @@ style.textContent = `
     padding: 20px;
     width: 800px;
     max-width: 90vw;
-    height: 600px;
+    height: 650px;
     max-height: 80vh;
     display: flex;
     flex-direction: column;
@@ -130,6 +130,7 @@ style.textContent = `
     text-align: left;
     border-bottom: 1px solid var(--border-color);
     color: var(--input-text);
+    vertical-align: middle; /* Ensure vertical alignment for icons */
 }
 
 .fs-table th {
@@ -156,8 +157,62 @@ style.textContent = `
     flex-shrink: 0;
 }
 
+.fs-item-name-link {
+    cursor: pointer;
+    color: #007bff; /* Or inherit from breadcrumb-item */
+    text-decoration: none;
+}
+
+.fs-item-name-link:hover {
+    text-decoration: underline;
+}
+
 .fs-item-selected {
     background-color: rgba(0, 123, 255, 0.2);
+}
+
+.fs-item-actions-trigger {
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.fs-item-actions-trigger:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.fs-item-context-menu {
+    position: absolute;
+    background-color: var(--comfy-menu-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    z-index: 10001; /* Above modal content */
+    min-width: 150px;
+    padding: 5px 0;
+}
+
+.fs-item-context-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    color: var(--input-text);
+    font-size: 13px;
+}
+
+.fs-item-context-menu-item:hover {
+    background-color: rgba(0, 123, 255, 0.1);
+}
+
+.fs-item-context-menu-item svg {
+    width: 14px;
+    height: 14px;
+    fill: currentColor;
 }
 
 .fs-footer {
@@ -195,6 +250,22 @@ style.textContent = `
 }
 
 .fs-create-folder-input {
+    flex: 1;
+    padding: 6px 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background-color: var(--comfy-input-bg);
+    color: var(--input-text);
+}
+
+.fs-rename-form {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.fs-rename-input {
     flex: 1;
     padding: 6px 8px;
     border: 1px solid var(--border-color);
@@ -289,8 +360,8 @@ style.textContent = `
 
 .fs-upload-modal {
     width: 700px;
-    height: 600px;
-    max-height: 80vh;
+    height: 700px;
+    max-height: 85vh;
     overflow: auto; /* Prevent content from overflowing */
 }
 
@@ -441,6 +512,17 @@ style.textContent = `
     max-height: calc(100% - 120px); /* Reserve space for header and actions */
 }
 
+.fs-upload-destination-info {
+    padding: 8px 0px;
+    margin-bottom: 10px;
+    font-size: 13px;
+    color: var(--input-text);
+    background-color: var(--comfy-input-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    text-align: center;
+}
+
 .fs-form-group {
     margin-bottom: 16px; /* Reduced from 18px for better fit */
     position: relative; /* For tooltip positioning */
@@ -478,6 +560,12 @@ style.textContent = `
     box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.2);
     outline: none;
 }
+
+.fs-input-error {
+    border-color: #dc3545 !important; /* Red border for error */
+    box-shadow: 0 0 0 2px rgba(220, 53, 69, 0.2) !important; /* Red shadow for error */
+}
+
 
 /* Override browser validation styling */
 .fs-form-input:invalid,
@@ -554,18 +642,31 @@ style.textContent = `
     font-size: 13px; /* Smaller text */
     line-height: 1.4;
     word-wrap: break-word;
-    max-height: 60px; /* Limit message height */
+    max-height: 80px; /* Increased height for longer messages */
     overflow-y: auto; /* Allow scrolling for long messages */
 }
 
-/* Form actions spacing */
-.fs-upload-form-actions {
-    padding: 12px 20px 0 20px; /* Reduced top padding */
-    border-top: 1px solid var(--border-color);
-    display: flex;
-    justify-content: flex-end;
-    gap: 10px;
-    flex-shrink: 0; /* Prevent actions from shrinking */
+/* Support for HTML content in messages */
+#fs-upload-message br {
+    line-height: 1.6;
+}
+
+/* HF Token input styling */
+#fs-hf-token-group {
+    background-color: rgba(255, 193, 7, 0.1);
+    border: 1px solid rgba(255, 193, 7, 0.3);
+    border-radius: 5px;
+    padding: 12px;
+    margin-top: 8px;
+}
+
+#fs-hf-token-group label {
+    color: #ffc107;
+    font-weight: 600;
+}
+
+#fs-hf-token-group small {
+    font-style: italic;
 }
 
 /* Ensure modal content doesn't exceed viewport */
@@ -586,6 +687,22 @@ style.textContent = `
     .fs-checkbox-form-group {
         margin-bottom: 8px;
     }
+}
+
+.fs-upload-form-actions {
+    padding: 10px 20px 20px 20px;
+    display: flex;
+    justify-content: space-between; /* Changed from flex-end to space-between */
+    gap: 10px;
+}
+
+/* Ensure the buttons maintain their order with Cancel on left, Start Upload on right */
+.fs-upload-form-actions #fs-upload-start {
+    order: 2; /* Changed from 1 to 2 to move to right */
+}
+
+.fs-upload-form-actions #fs-upload-cancel {
+    order: 1; /* Changed from 2 to 1 to move to left */
 }
 `;
 document.head.appendChild(style);

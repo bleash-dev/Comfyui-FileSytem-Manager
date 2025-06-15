@@ -1,2 +1,4 @@
 aiofiles>=23.1.0
 playwright>=1.40.0
+huggingface_hub>=0.17.0
+hf-transfer>=0.1.0

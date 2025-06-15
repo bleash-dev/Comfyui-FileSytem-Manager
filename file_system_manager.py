@@ -3,13 +3,19 @@ import json
 import shutil
 from pathlib import Path
 from typing import List, Dict, Any
-import folder_paths
-import server
+from urllib.parse import unquote # For decoding URL encoded paths
+
+# Import aiohttp web for responses
+from aiohttp import web
+import folder_paths # Ensure folder_paths is imported
+import server # Ensure server is imported
+
 
 # Import download endpoints
 from .download_endpoints import FileSystemDownloadAPI
-# Import Google Drive Handler
 from .google_drive_handler import GoogleDriveDownloaderAPI, progress_store as gdrive_progress_store
+# Import Hugging Face Handler
+from .huggingface_handler import HuggingFaceDownloadAPI, hf_progress_store
 
 
 class FileSystemManagerAPI:
@@ -31,7 +37,7 @@ class FileSystemManagerAPI:
         try:
             path = path.resolve()
             for allowed_dir in self.allowed_directories.values():
-                if path.is_relative_to(allowed_dir.resolve()):
+                if path.is_relative_to(allowed_dir.resolve()): # Updated to use is_relative_to
                     return True
             return False
         except Exception:
@@ -65,145 +71,207 @@ class FileSystemManagerAPI:
                 return {"success": False, "error": "Directory not allowed"}
             
             target_path = self.allowed_directories[root_dir]
-            if len(path_parts) > 1:
-                target_path = target_path / '/'.join(path_parts[1:])
+
+            # Append the rest of the path
+            for part in path_parts[1:]:
+                target_path = target_path / part
             
             if not self.is_path_allowed(target_path) or not target_path.exists():
-                return {"success": False, "error": "Directory not found or not allowed"}
-            
+                return {"success": False, "error": "Path not found or not allowed"}
+
             contents = []
-            try:
-                for item in sorted(target_path.iterdir()):
-                    if item.name.startswith('.'):
-                        continue  # Skip hidden files
+            for item in sorted(target_path.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
+                try:
+                    # Handle symbolic links specially
+                    if item.is_symlink():
+                        # Check if the symlink target exists
+                        try:
+                            # Resolve the symlink to its actual target
+                            actual_target = item.resolve()
+                            if actual_target.exists():
+                                # Use the target's stats
+                                item_stat = actual_target.stat()
+                                symlink_target_exists = True
+                                print(f"🔗 Valid symlink: {item} -> {actual_target}")
+                            else:
+                                print(f"💥 Broken symlink detected: {item} -> {actual_target}")
+                                # Remove broken symlink immediately
+                                item.unlink()
+                                print(f"🗑️ Removed broken symlink: {item}")
+                                continue
+                        except (OSError, FileNotFoundError) as symlink_error:
+                            print(f"💥 Broken symlink detected: {item} - {symlink_error}")
+                            # Remove broken symlink immediately
+                            try:
+                                item.unlink()
+                                print(f"🗑️ Removed broken symlink: {item}")
+                            except:
+                                print(f"❌ Failed to remove broken symlink: {item}")
+                            continue
+                    else:
+                        # Check if the item still exists (handle race conditions for regular files/dirs)
+                        if not item.exists():
+                            print(f"⚠️ Skipping non-existent item: {item}")
+                            continue
+                        
+                        # Get item stats safely for regular files/dirs
+                        try:
+                            item_stat = item.stat()
+                            symlink_target_exists = False  # Not a symlink
+                        except (OSError, FileNotFoundError) as stat_error:
+                            print(f"⚠️ Error getting stats for {item}: {stat_error}")
+                            continue
                     
-                    item_info = {
-                        "name": item.name,
-                        "type": "directory" if item.is_dir() else "file",
-                        "path": str(Path(relative_path) / item.name),
-                        "size": item.stat().st_size if item.is_file() else None,
-                        "modified": item.stat().st_mtime
-                    }
-                    contents.append(item_info)
-            except PermissionError:
-                return {"success": False, "error": "Permission denied"}
-            
-            return {
-                "success": True,
-                "path": relative_path,
-                "contents": contents
-            }
+                    # Find which allowed_dir it belongs to
+                    item_relative_to_comfy_root = item.relative_to(self.comfyui_base)
+                    
+                    # Determine the base key (models, users, custom_nodes)
+                    base_key_for_item = ""
+                    for key, val_path in self.allowed_directories.items():
+                        if item.is_relative_to(val_path):
+                            base_key_for_item = key
+                            break
+                    
+                    if not base_key_for_item: # Should not happen if is_path_allowed works
+                        item_display_path = str(item_relative_to_comfy_root)
+                    else:
+                        item_display_path = f"{base_key_for_item}/{item.relative_to(self.allowed_directories[base_key_for_item])}"
+                    
+                    item_display_path = item_display_path.replace("\\", "/")
+
+                    # Determine item type - treat working symlinks as their target type
+                    if item.is_symlink() and symlink_target_exists:
+                        # For symlinks, determine type based on the resolved target
+                        item_type = 'directory' if actual_target.is_dir() else 'file'
+                        item_size = item_stat.st_size if actual_target.is_file() else None
+                    else:
+                        # Regular files and directories
+                        item_type = 'directory' if item.is_dir() else 'file'
+                        item_size = item_stat.st_size if item.is_file() else None
+
+                    contents.append({
+                        'name': item.name,
+                        'path': item_display_path,
+                        'type': item_type,
+                        'size': item_size,
+                        'modified': item_stat.st_mtime
+                    })
+                except Exception as e_item:
+                    print(f"⚠️ Error processing item {item}: {e_item}")
+                    # Skip problematic items instead of failing the entire operation
+
+            return {"success": True, "contents": contents}
             
         except Exception as e:
+            print(f"Error in get_directory_contents: {e}")
             return {"success": False, "error": str(e)}
     
     def create_directory(self, relative_path: str, directory_name: str) -> Dict[str, Any]:
         """Create a new directory"""
         try:
-            # Validate directory name
             if not directory_name or '/' in directory_name or '\\' in directory_name:
                 return {"success": False, "error": "Invalid directory name"}
+
+            base_create_path = self.comfyui_base
+            if relative_path: # If relative_path is provided, it's relative to an allowed root
+                path_parts = relative_path.strip('/').split('/')
+                root_dir_key = path_parts[0]
+                if root_dir_key not in self.allowed_directories:
+                    return {"success": False, "error": "Invalid base path for creation"}
+                
+                base_create_path = self.allowed_directories[root_dir_key]
+                for part in path_parts[1:]:
+                    base_create_path = base_create_path / part
+            else: # Creating in one of the root allowed directories (e.g. "models/")
+                  # This case needs careful handling or disallowing if creating directly in "models/" root is not desired.
+                  # For now, let's assume relative_path will point to a subfolder like "models/loras"
+                  # If relative_path is empty, it implies creating in a root like 'models', 'users'.
+                  # This needs clarification. For now, let's assume it means creating in the current browsed path.
+                  # If current browsed path is "models", then new folder is "models/new_folder_name".
+                  # The JS client sends `this.currentPath` which can be "models" or "models/loras".
+                pass # base_create_path is already comfyui_base, or should be derived from relative_path
+
+            target_dir_path = base_create_path / directory_name
             
-            if not relative_path:
-                return {"success": False, "error": "Cannot create directory at root level"}
-            
-            path_parts = relative_path.strip('/').split('/')
-            root_dir = path_parts[0]
-            
-            if root_dir not in self.allowed_directories:
-                return {"success": False, "error": "Directory not allowed"}
-            
-            target_path = self.allowed_directories[root_dir]
-            if len(path_parts) > 1:
-                target_path = target_path / '/'.join(path_parts[1:])
-            
-            new_dir_path = target_path / directory_name
-            
-            if not self.is_path_allowed(new_dir_path):
-                return {"success": False, "error": "Path not allowed"}
-            
-            if new_dir_path.exists():
+            if not self.is_path_allowed(target_dir_path.parent): # Check parent of the dir to be created
+                 return {"success": False, "error": "Creation path not allowed"}
+
+            if target_dir_path.exists():
                 return {"success": False, "error": "Directory already exists"}
             
-            new_dir_path.mkdir(parents=True)
-            
-            return {
-                "success": True,
-                "message": f"Directory '{directory_name}' created successfully",
-                "path": str(Path(relative_path) / directory_name)
-            }
+            target_dir_path.mkdir(parents=True, exist_ok=True)
+            return {"success": True, "message": f"Directory '{directory_name}' created successfully"}
             
         except Exception as e:
+            print(f"Error creating directory: {e}")
             return {"success": False, "error": str(e)}
     
     def delete_item(self, relative_path: str) -> Dict[str, Any]:
         """Delete a file or directory"""
         try:
             if not relative_path:
-                return {"success": False, "error": "Cannot delete root directories"}
-            
+                return {"success": False, "error": "No path provided for deletion"}
+
             path_parts = relative_path.strip('/').split('/')
-            root_dir = path_parts[0]
-            
-            if root_dir not in self.allowed_directories:
-                return {"success": False, "error": "Directory not allowed"}
-            
-            target_path = self.allowed_directories[root_dir]
-            if len(path_parts) > 1:
-                target_path = target_path / '/'.join(path_parts[1:])
-            else:
-                return {"success": False, "error": "Cannot delete root directories"}
-            
-            if not self.is_path_allowed(target_path) or not target_path.exists():
+            root_dir_key = path_parts[0]
+            if root_dir_key not in self.allowed_directories:
+                return {"success": False, "error": "Invalid path for deletion"}
+
+            item_path = self.allowed_directories[root_dir_key]
+            for part in path_parts[1:]:
+                item_path = item_path / part
+
+            if not self.is_path_allowed(item_path) or not item_path.exists():
                 return {"success": False, "error": "Item not found or not allowed"}
-            
-            if target_path.is_dir():
-                shutil.rmtree(target_path)
-                message = f"Directory '{target_path.name}' deleted successfully"
+
+            if item_path.is_dir():
+                shutil.rmtree(item_path)
+                return {"success": True, "message": f"Directory '{item_path.name}' deleted successfully"}
             else:
-                target_path.unlink()
-                message = f"File '{target_path.name}' deleted successfully"
-            
-            return {"success": True, "message": message}
+                item_path.unlink()
+                return {"success": True, "message": f"File '{item_path.name}' deleted successfully"}
             
         except Exception as e:
+            print(f"Error deleting item: {e}")
             return {"success": False, "error": str(e)}
-    
-    def get_file_info(self, relative_path: str) -> Dict[str, Any]:
-        """Get detailed information about a file"""
+
+    def rename_item(self, old_relative_path: str, new_name: str) -> Dict[str, Any]:
+        """Rename a file or directory"""
         try:
-            if not relative_path:
-                return {"success": False, "error": "No file specified"}
-            
-            path_parts = relative_path.strip('/').split('/')
-            root_dir = path_parts[0]
-            
-            if root_dir not in self.allowed_directories:
-                return {"success": False, "error": "Directory not allowed"}
-            
-            target_path = self.allowed_directories[root_dir]
-            if len(path_parts) > 1:
-                target_path = target_path / '/'.join(path_parts[1:])
-            
-            if not self.is_path_allowed(target_path) or not target_path.exists():
-                return {"success": False, "error": "File not found or not allowed"}
-            
-            if target_path.is_dir():
-                return {"success": False, "error": "Path is a directory, not a file"}
-            
-            stat = target_path.stat()
-            
-            return {
-                "success": True,
-                "name": target_path.name,
-                "path": relative_path,
-                "size": stat.st_size,
-                "modified": stat.st_mtime,
-                "extension": target_path.suffix.lower(),
-                "absolute_path": str(target_path)
-            }
-            
+            if not old_relative_path or not new_name:
+                return {"success": False, "error": "Missing old path or new name"}
+
+            # Validate new name (no path separators)
+            if '/' in new_name or '\\' in new_name:
+                return {"success": False, "error": "New name cannot contain path separators"}
+
+            path_parts = old_relative_path.strip('/').split('/')
+            root_dir_key = path_parts[0]
+            if root_dir_key not in self.allowed_directories:
+                return {"success": False, "error": "Invalid path for renaming"}
+
+            old_item_path = self.allowed_directories[root_dir_key]
+            for part in path_parts[1:]:
+                old_item_path = old_item_path / part
+
+            if not self.is_path_allowed(old_item_path) or not old_item_path.exists():
+                return {"success": False, "error": "Item not found or not allowed"}
+
+            # Create new path
+            new_item_path = old_item_path.parent / new_name
+
+            if new_item_path.exists():
+                return {"success": False, "error": "Item with new name already exists"}
+
+            if not self.is_path_allowed(new_item_path):
+                return {"success": False, "error": "New path not allowed"}
+
+            # Perform the rename
+            old_item_path.rename(new_item_path)
+            return {"success": True, "message": f"Item renamed to '{new_name}' successfully"}
+
         except Exception as e:
+            print(f"Error renaming item: {e}")
             return {"success": False, "error": str(e)}
 
 # Initialize the API
@@ -215,49 +283,55 @@ download_api = FileSystemDownloadAPI()
 # Initialize Google Drive Handler API
 google_drive_download_api = GoogleDriveDownloaderAPI()
 
+# Initialize Hugging Face Handler API
+hf_download_api = HuggingFaceDownloadAPI()
+
 @server.PromptServer.instance.routes.get("/filesystem/browse")
 async def browse_directory(request):
     """API endpoint for browsing directories"""
     try:
-        path = request.query.get('path', '')
-        result = file_system_api.get_directory_contents(path)
-        return server.web.json_response(result)
+        path = request.query.get('path', "")
+        # Decode URL-encoded path components
+        decoded_path = unquote(path)
+        result = file_system_api.get_directory_contents(decoded_path)
+        return web.json_response(result)
     except Exception as e:
-        return server.web.json_response(
-            {"success": False, "error": str(e)}, 
-            status=500
-        )
+        print(f"Error in /filesystem/browse: {e}")
+        return web.json_response({'success': False, 'error': str(e)}, status=500)
 
 @server.PromptServer.instance.routes.post("/filesystem/create_directory")
 async def create_directory(request):
     """API endpoint for creating directories"""
     try:
         data = await request.json()
-        path = data.get('path', '')
-        directory_name = data.get('directory_name', '')
+        path = data.get("path", "")
+        directory_name = data.get("directory_name")
         
-        result = file_system_api.create_directory(path, directory_name)
-        return server.web.json_response(result)
+        if not directory_name:
+            return web.json_response({'success': False, 'error': 'Directory name not provided'}, status=400)
+        
+        decoded_path = unquote(path)
+        result = file_system_api.create_directory(decoded_path, directory_name)
+        return web.json_response(result)
     except Exception as e:
-        return server.web.json_response(
-            {"success": False, "error": str(e)}, 
-            status=500
-        )
+        print(f"Error in /filesystem/create_directory: {e}")
+        return web.json_response({'success': False, 'error': str(e)}, status=500)
 
 @server.PromptServer.instance.routes.delete("/filesystem/delete")
 async def delete_item(request):
     """API endpoint for deleting files and directories"""
     try:
         data = await request.json()
-        path = data.get('path', '')
+        path = data.get("path")
+        if not path:
+            return web.json_response({'success': False, 'error': 'Path not provided'}, status=400)
         
-        result = file_system_api.delete_item(path)
-        return server.web.json_response(result)
+        decoded_path = unquote(path)
+        result = file_system_api.delete_item(decoded_path)
+        return web.json_response(result)
     except Exception as e:
-        return server.web.json_response(
-            {"success": False, "error": str(e)}, 
-            status=500
-        )
+        print(f"Error in /filesystem/delete: {e}")
+        return web.json_response({'success': False, 'error': str(e)}, status=500)
 
 @server.PromptServer.instance.routes.get("/filesystem/file_info")
 async def get_file_info(request):
@@ -271,6 +345,27 @@ async def get_file_info(request):
             {"success": False, "error": str(e)}, 
             status=500
         )
+
+@server.PromptServer.instance.routes.post("/filesystem/rename_item")
+async def rename_item_endpoint(request):
+    """API endpoint for renaming files and directories"""
+    try:
+        data = await request.json()
+        old_path = data.get("old_path")
+        new_name = data.get("new_name")
+
+        if not old_path or not new_name:
+            return web.json_response({'success': False, 'error': 'Missing old_path or new_name'}, status=400)
+        
+        decoded_old_path = unquote(old_path)
+        # new_name should not be URL encoded as it's a single name component
+        
+        result = file_system_api.rename_item(decoded_old_path, new_name)
+        return web.json_response(result)
+    except Exception as e:
+        print(f"Error in /filesystem/rename_item: {e}")
+        return web.json_response({'success': False, 'error': str(e)}, status=500)
+        
 
 @server.PromptServer.instance.routes.get("/filesystem/download_file")
 async def download_file_endpoint(request):
@@ -287,47 +382,56 @@ async def upload_from_google_drive_endpoint(request):
     """API endpoint for uploading files from Google Drive"""
     try:
         data = await request.json()
-        session_id = data.get('session_id') # For progress tracking
+        google_drive_url = data.get('google_drive_url')
+        filename = data.get('filename')
+        # model_type = data.get('model_type') # This was from the old GDrive downloader
+        target_path_relative = data.get('path') # This is the FSM relative path
+        overwrite = data.get('overwrite', False)
+        auto_extract_zip = data.get('auto_extract_zip', True)
+        session_id = data.get('session_id')
+        extension = data.get('extension') # Added for GDrive uploads via FSM
 
-        required_fields = ['google_drive_url', 'filename', 'extension', 'path']
-        for field in required_fields:
-            if field not in data or not data[field]:
-                return server.web.json_response(
-                    {"success": False, "error": f"Missing or empty required field: {field}"},
-                    status=400
-                )
-        
-        # The 'path' from frontend is the relative directory within ComfyUI (e.g., "models/checkpoints")
-        upload_destination_path = data['path']
-        
-        # Validate that the upload_destination_path is allowed by checking against FSM's logic if needed,
-        # though typically the frontend only allows navigating allowed paths.
-        # For simplicity, we trust the 'path' provided by the FSM frontend is valid.
-        # The GoogleDriveHandlerAPI.get_target_download_path will construct the full absolute path.
+        if not all([google_drive_url, filename, extension, target_path_relative is not None, session_id]):
+            return web.json_response({'success': False, 'error': 'Missing required fields for Google Drive upload.'}, status=400)
 
+        # Construct the full filename with extension
+        full_filename = f"{filename}.{extension}"
+
+        # The `target_path_relative` from FSM is like "models/loras" or "users/my_folder"
+        # We need to resolve this to an absolute path for GoogleDriveDownloaderAPI
+        # GoogleDriveDownloaderAPI's get_download_path expects a model_type or custom_path.
+        # We can treat the FSM path as a custom_path for GDrive downloader.
+        
+        path_parts = target_path_relative.strip('/').split('/')
+        if not path_parts or path_parts[0] not in file_system_api.allowed_directories:
+             return web.json_response({'success': False, 'error': 'Invalid target path for Google Drive upload.'}, status=400)
+
+        # Resolve FSM relative path to absolute path
+        absolute_target_dir = file_system_api.allowed_directories[path_parts[0]]
+        for part in path_parts[1:]:
+            absolute_target_dir = absolute_target_dir / part
+        
+        if not file_system_api.is_path_allowed(absolute_target_dir) or not absolute_target_dir.is_dir():
+            return web.json_response({'success': False, 'error': 'Target directory for Google Drive upload is not valid or not allowed.'}, status=400)
+
+        # Use "custom" model_type and provide the absolute_target_dir as custom_path
+        # The GoogleDriveDownloaderAPI will append the filename to this path.
+        # So, custom_path should be the directory where the file will be saved.
         result = await google_drive_download_api.download_file_async(
-            google_drive_url=data['google_drive_url'],
-            filename_no_ext=data['filename'],
-            extension=data['extension'],
-            upload_destination_path_str=upload_destination_path,
-            overwrite=data.get('overwrite', False),
-            auto_extract_zip=data.get('auto_extract_zip', True),
+            google_drive_url=google_drive_url,
+            filename=full_filename, # Pass full filename with extension
+            model_type="custom", # Use "custom" as we provide the full path
+            custom_path=str(absolute_target_dir), # Pass the absolute directory path
+            overwrite=overwrite,
+            auto_extract_zip=auto_extract_zip,
             session_id=session_id
-            # progress_callback can be added if server-side logging of progress is needed beyond client polling
         )
-        
-        # No explicit cleanup of gdrive_progress_store here, download_file_async handles its lifecycle.
-        return server.web.json_response(result)
+        return web.json_response(result)
         
     except Exception as e:
-        # Log the full error for debugging
-        print(f"Error in /filesystem/upload_from_google_drive: {type(e).__name__} - {e}")
-        import traceback
-        traceback.print_exc()
-        return server.web.json_response(
-            {"success": False, "error": f"An unexpected error occurred: {str(e)}"},
-            status=500
-        )
+        print(f"Error in /filesystem/upload_from_google_drive: {e}")
+        return web.json_response({'success': False, 'error': str(e)}, status=500)
+        
 
 @server.PromptServer.instance.routes.get("/filesystem/google_drive_progress/{session_id}")
 async def get_google_drive_progress_endpoint(request):
@@ -338,6 +442,67 @@ async def get_google_drive_progress_endpoint(request):
         return server.web.json_response(progress)
     except Exception as e:
         return server.web.json_response(
+            {"status": "error", "message": str(e), "percentage": 0},
+            status=500
+        )
+
+@server.PromptServer.instance.routes.post("/filesystem/download_from_huggingface")
+async def download_from_huggingface_endpoint(request):
+    """API endpoint for downloading files/repos from Hugging Face"""
+    try:
+        data = await request.json()
+        hf_url = data.get('hf_url') # Can be repo_id or full URL to repo/file
+        target_fsm_path = data.get('path') # FSM relative path
+        overwrite = data.get('overwrite', False)
+        session_id = data.get('session_id')
+        user_token = data.get('user_token') # New: user-provided HF token
+
+        if not all([hf_url, target_fsm_path is not None, session_id]):
+            return web.json_response({'success': False, 'error': 'Missing required fields for Hugging Face download.'}, status=400)
+
+        # Resolve FSM relative path to an absolute path that hf_download_api can use
+        path_parts = target_fsm_path.strip('/').split('/')
+        if not path_parts or path_parts[0] not in file_system_api.allowed_directories:
+             return web.json_response({'success': False, 'error': 'Invalid target path for Hugging Face download.'}, status=400)
+        
+        # Construct absolute path to check if it's a directory and allowed
+        abs_target_dir_check = file_system_api.allowed_directories[path_parts[0]]
+        for part in path_parts[1:]:
+            abs_target_dir_check = abs_target_dir_check / part
+        
+        if not file_system_api.is_path_allowed(abs_target_dir_check): # Check if the base path is allowed
+             return web.json_response({'success': False, 'error': 'Target directory for Hugging Face download is not allowed.'}, status=400)
+        
+        # If abs_target_dir_check exists, it must be a directory
+        if abs_target_dir_check.exists() and not abs_target_dir_check.is_dir():
+            return web.json_response({'success': False, 'error': 'Target path for Hugging Face download exists and is not a directory.'}, status=400)
+
+        result = await hf_download_api.download_from_huggingface(
+            hf_url=hf_url,
+            target_fsm_path=target_fsm_path,
+            overwrite=overwrite,
+            session_id=session_id,
+            user_token=user_token  # Pass user token if provided
+        )
+        return web.json_response(result)
+        
+    except Exception as e:
+        print(f"Error in /filesystem/download_from_huggingface: {e}")
+        # Ensure session progress reflects the error
+        session_id = data.get('session_id') if 'data' in locals() and isinstance(data, dict) else None
+        if session_id:
+            hf_progress_store[session_id] = {"status": "error", "message": str(e), "percentage": 0}
+        return web.json_response({'success': False, 'error': str(e)}, status=500)
+
+@server.PromptServer.instance.routes.get("/filesystem/huggingface_progress/{session_id}")
+async def get_huggingface_progress_endpoint(request):
+    """API endpoint to get Hugging Face download progress"""
+    try:
+        session_id = request.match_info['session_id']
+        progress = hf_progress_store.get(session_id, {"status": "not_found", "message": "Session not found", "percentage": 0})
+        return web.json_response(progress)
+    except Exception as e:
+        return web.json_response(
             {"status": "error", "message": str(e), "percentage": 0},
             status=500
         )

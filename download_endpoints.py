@@ -87,7 +87,6 @@ class FileSystemDownloadAPI:
             return response
             
         except Exception as e:
-            print(f"Error downloading file: {str(e)}")
             return web.json_response({'error': str(e)}, status=500)
 
     async def download_multiple_files(self, request):

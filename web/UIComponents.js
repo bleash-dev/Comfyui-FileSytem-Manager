@@ -23,6 +23,9 @@ export class UIComponents {
                     <button class="fs-btn fs-btn-secondary" id="fs-download-selected" disabled>
                         ⬇️ Download
                     </button>
+                    <button class="fs-btn fs-btn-secondary" id="fs-rename" disabled>
+                        ✏️ Rename
+                    </button>
                     <button class="fs-btn fs-btn-danger" id="fs-delete" disabled>
                         🗑️ Delete
                     </button>
@@ -36,6 +39,12 @@ export class UIComponents {
                     <button class="fs-btn fs-btn-primary" id="fs-create-confirm">Create</button>
                     <button class="fs-btn fs-btn-secondary" id="fs-create-cancel">Cancel</button>
                 </div>
+
+                <div id="fs-rename-form" class="fs-rename-form" style="display: none;">
+                    <input type="text" placeholder="New name..." class="fs-rename-input" id="fs-new-name" maxlength="255">
+                    <button class="fs-btn fs-btn-primary" id="fs-rename-confirm">Rename</button>
+                    <button class="fs-btn fs-btn-secondary" id="fs-rename-cancel">Cancel</button>
+                </div>
                 
                 <div id="fs-message"></div>
                 
@@ -47,6 +56,7 @@ export class UIComponents {
                                 <th>Type</th>
                                 <th>Size</th>
                                 <th>Modified</th>
+                                <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody id="fs-table-body">
@@ -122,6 +132,7 @@ export class UIComponents {
                         </div>
                         
                         <div class="fs-upload-form-content">
+                            <div id="fs-upload-destination-info" class="fs-upload-destination-info" style="display: none;"></div>
                             <!-- Common fields -->
                             <div class="fs-form-group">
                                 <label for="fs-upload-url" id="fs-upload-url-label">URL:</label>
@@ -199,7 +210,7 @@ export class UIComponents {
         }
     }
 
-    static renderContents(modal, contents, onItemClick, onItemDoubleClick) {
+    static renderContents(modal, contents, onItemClick, onNavigateLinkClick, onActionTriggerClick) {
         const tbody = modal.querySelector('#fs-table-body');
         tbody.innerHTML = '';
         
@@ -217,7 +228,16 @@ export class UIComponents {
             icon.className = 'fs-item-icon';
             
             const nameSpan = document.createElement('span');
-            nameSpan.textContent = item.name;
+            if (item.type === 'directory') {
+                nameSpan.className = 'fs-item-name-link';
+                nameSpan.textContent = item.name;
+                nameSpan.addEventListener('click', (e) => {
+                    e.stopPropagation(); // Prevent row click from firing immediately if not desired
+                    onNavigateLinkClick(item.path);
+                });
+            } else {
+                nameSpan.textContent = item.name;
+            }
             
             nameDiv.appendChild(icon);
             nameDiv.appendChild(nameSpan);
@@ -235,22 +255,58 @@ export class UIComponents {
             const modifiedCell = document.createElement('td');
             modifiedCell.textContent = item.modified ? new Date(item.modified * 1000).toLocaleString() : '-';
             
+            // Actions column
+            const actionsCell = document.createElement('td');
+            actionsCell.style.textAlign = 'center';
+            const actionTrigger = document.createElement('span');
+            actionTrigger.className = 'fs-item-actions-trigger';
+            actionTrigger.innerHTML = `
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>
+                </svg>
+            `;
+            actionTrigger.title = "Actions";
+            actionTrigger.addEventListener('click', (e) => {
+                e.stopPropagation(); // Prevent row click event
+                onActionTriggerClick(item, e.currentTarget);
+            });
+            actionsCell.appendChild(actionTrigger);
+
             row.appendChild(nameCell);
             row.appendChild(typeCell);
             row.appendChild(sizeCell);
             row.appendChild(modifiedCell);
+            row.appendChild(actionsCell);
             
-            // Event listeners
+            // Event listeners for selection
             row.addEventListener('click', (e) => {
-                onItemClick(item, e);
+                onItemClick(item, e); 
             });
             
-            row.addEventListener('dblclick', () => {
-                onItemDoubleClick(item);
-            });
+            // No dblclick for navigation on row, link handles it.
             
             tbody.appendChild(row);
         }
+    }
+
+    static createItemContextMenu(actions, onActionClick) {
+        const menu = document.createElement('div');
+        menu.className = 'fs-item-context-menu';
+        
+        actions.forEach(action => {
+            const menuItem = document.createElement('div');
+            menuItem.className = 'fs-item-context-menu-item';
+            menuItem.dataset.action = action.id;
+            // menuItem.textContent = action.label; // Using innerHTML for icons
+            menuItem.innerHTML = `${action.icon || ''} ${action.label}`;
+            menuItem.addEventListener('click', (e) => {
+                e.stopPropagation();
+                onActionClick(action.id);
+            });
+            menu.appendChild(menuItem);
+        });
+        
+        return menu;
     }
 
     static updateSelection(modal, selectedItems) {
@@ -314,24 +370,31 @@ export class UIComponents {
         const optionsView = modal.querySelector('#fs-upload-options');
         const formView = modal.querySelector('#fs-upload-form');
         const title = modal.querySelector('#fs-upload-title');
+        const destinationInfo = modal.querySelector('#fs-upload-destination-info');
         
         optionsView.style.display = 'block';
         formView.style.display = 'none';
         title.textContent = 'Upload File';
+        if(destinationInfo) destinationInfo.style.display = 'none';
     }
 
-    static showUploadForm(modal, type) {
+    static showUploadForm(modal, type, destinationPathForDisplay) {
         const optionsView = modal.querySelector('#fs-upload-options');
         const formView = modal.querySelector('#fs-upload-form');
         const title = modal.querySelector('#fs-upload-title');
-        const extraFields = modal.querySelector('#fs-upload-extra-fields');
         const urlInput = modal.querySelector('#fs-upload-url');
         const urlLabel = modal.querySelector('#fs-upload-url-label');
         const formTitle = modal.querySelector('#fs-upload-form-title');
         const typeSpecificFieldsContainer = modal.querySelector('#fs-upload-type-specific-fields');
+        const destinationInfo = modal.querySelector('#fs-upload-destination-info');
         
         optionsView.style.display = 'none';
         formView.style.display = 'block';
+
+        if (destinationInfo) {
+            destinationInfo.textContent = `Upload to: ${destinationPathForDisplay || 'current directory'}`;
+            destinationInfo.style.display = 'block';
+        }
         
         // Update title and form based on type
         const typeConfig = {
@@ -342,11 +405,11 @@ export class UIComponents {
                 extraFieldsHTML: `
                     <div class="fs-form-group">
                         <label for="fs-gdrive-filename">Filename (without extension):</label>
-                        <input type="text" id="fs-gdrive-filename" class="fs-form-input" placeholder="e.g., my_model" required>
+                        <input type="text" id="fs-gdrive-filename" class="fs-form-input" placeholder="e.g., my_model">
                     </div>
                     <div class="fs-form-group">
                         <label for="fs-gdrive-extension">Extension:</label>
-                        <input type="text" id="fs-gdrive-extension" class="fs-form-input" placeholder="e.g., safetensors, ckpt, zip" required>
+                        <input type="text" id="fs-gdrive-extension" class="fs-form-input" placeholder="e.g., safetensors, ckpt, zip">
                     </div>
                     <div class="fs-form-group fs-checkbox-form-group">
                         <div class="fs-checkbox-group">
@@ -364,11 +427,21 @@ export class UIComponents {
             },
             'huggingface': {
                 title: 'Upload from Hugging Face',
-                urlPlaceholder: 'Enter Hugging Face model URL...',
-                extraFields: `
-                    <div class="fs-form-group">
-                        <label for="fs-hf-token">Access Token (optional):</label>
-                        <input type="password" id="fs-hf-token" class="fs-form-input" placeholder="Hugging Face access token for private repos">
+                urlPlaceholder: 'Enter Hugging Face Repo ID (e.g., user/repo) or File URL',
+                urlLabelText: 'HF Repo ID / File URL:',
+                extraFieldsHTML: `
+                    <div class="fs-form-group fs-checkbox-form-group">
+                        <div class="fs-checkbox-group">
+                            <input type="checkbox" id="fs-hf-overwrite" style="width: auto;">
+                            <label for="fs-hf-overwrite" style="margin-bottom: 0;">Overwrite existing files/folders</label>
+                        </div>
+                    </div>
+                    <div class="fs-form-group" id="fs-hf-token-group" style="display: none;">
+                        <label for="fs-hf-token">Your Hugging Face Token:</label>
+                        <input type="password" id="fs-hf-token" class="fs-form-input" placeholder="hf_...">
+                        <small style="color: var(--input-text); opacity: 0.7; font-size: 12px; margin-top: 4px; display: block;">
+                            We don't store your token. It's only used for this download.
+                        </small>
                     </div>
                 `
             },
@@ -398,12 +471,15 @@ export class UIComponents {
         // Clear previous values
         urlInput.value = '';
         // Clear common optional filename if it exists from other types
-        const commonFilenameInput = modal.querySelector('#fs-upload-filename');
+        const commonFilenameInput = modal.querySelector('#fs-upload-filename'); // This ID seems unused
         if (commonFilenameInput) commonFilenameInput.value = '';
 
         // Clear any previous progress/messages
         this.hideUploadProgress(modal);
         this.showUploadMessage(modal, '', false);
+
+        // The FileSystemManager instance will handle attaching input listeners
+        // and setting the initial button state after this method.
     }
 
     static showUploadProgress(modal, message, percentage) {
@@ -413,7 +489,12 @@ export class UIComponents {
 
         if (progressContainer && textElement && fillElement) {
             progressContainer.style.display = 'block';
-            textElement.textContent = message;
+            // Format the message to include the percentage
+            let displayMessage = message;
+            if (typeof percentage === 'number') {
+                displayMessage = `${message} (${Math.round(percentage)}%)`;
+            }
+            textElement.textContent = displayMessage;
             fillElement.style.width = `${percentage}%`;
         }
     }
@@ -427,14 +508,26 @@ export class UIComponents {
         }
     }
 
-    static showUploadMessage(modal, message, isError = false) {
+    static showUploadMessage(modal, message, isError = false, allowHTML = false) {
         const messageDiv = modal.querySelector('#fs-upload-message');
         if (messageDiv) {
-            messageDiv.textContent = message;
+            if (allowHTML) {
+                messageDiv.innerHTML = message;
+            } else {
+                messageDiv.textContent = message;
+            }
             messageDiv.className = `fs-message ${isError ? 'fs-error' : 'fs-success'}`;
             if (!message) {
                 messageDiv.className = 'fs-message'; // Clear classes if message is empty
+                messageDiv.innerHTML = '';
             }
+        }
+    }
+
+    static showHFTokenInput(modal, show = true) {
+        const tokenGroup = modal.querySelector('#fs-hf-token-group');
+        if (tokenGroup) {
+            tokenGroup.style.display = show ? 'block' : 'none';
         }
     }
 
