@@ -669,6 +669,24 @@ style.textContent = `
     font-style: italic;
 }
 
+/* CivitAI Token input styling */
+#fs-civitai-token-group {
+    background-color: rgba(220, 53, 69, 0.1);
+    border: 1px solid rgba(220, 53, 69, 0.3);
+    border-radius: 5px;
+    padding: 12px;
+    margin-top: 8px;
+}
+
+#fs-civitai-token-group label {
+    color: #dc3545;
+    font-weight: 600;
+}
+
+#fs-civitai-token-group small {
+    font-style: italic;
+}
+
 /* Ensure modal content doesn't exceed viewport */
 @media (max-height: 600px) {
     .fs-upload-modal {

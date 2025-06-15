@@ -717,7 +717,7 @@ export class FileSystemManager {
     async startUpload() {
         if (!this.uploadModal) return;
         
-        this.setUploadButtonState(false); // Disable button when upload starts
+        this.setUploadButtonState(false);
         UIComponents.showUploadMessage(this.uploadModal, '', false); 
 
         const urlInput = this.uploadModal.querySelector('#fs-upload-url');
@@ -733,9 +733,8 @@ export class FileSystemManager {
             hasError = true;
         }
 
-        // Determine destination path for the backend
-        let backendDestinationPath = this.currentPath; // Default
-        if (this.currentUploadDestinationPath !== undefined) { // Use path determined when upload form was shown
+        let backendDestinationPath = this.currentPath;
+        if (this.currentUploadDestinationPath !== undefined) {
             backendDestinationPath = this.currentUploadDestinationPath;
         }
 
@@ -744,7 +743,7 @@ export class FileSystemManager {
             path: backendDestinationPath, 
         };
         
-        let apiEndpoint = '/filesystem/upload'; // Default, not used for GDrive/HF
+        let apiEndpoint = '/filesystem/upload';
 
         if (this.currentUploadType === 'google-drive') {
             apiEndpoint = '/filesystem/upload_from_google_drive';
@@ -754,8 +753,8 @@ export class FileSystemManager {
             const filename = filenameInput.value.trim();
             let extension = extensionInput.value.trim();
 
-            // filenameInput.classList.remove('fs-input-error'); // Removed: managed by blur/input
-            // extensionInput.classList.remove('fs-input-error'); // Removed: managed by blur/input
+            filenameInput.classList.remove('fs-input-error');
+            extensionInput.classList.remove('fs-input-error');
 
             if (!filename) {
                 errors.push('Filename is required for Google Drive.');
@@ -798,6 +797,24 @@ export class FileSystemManager {
             const tokenInput = this.uploadModal.querySelector('#fs-hf-token');
             if (tokenInput && tokenInput.value.trim()) {
                 uploadData.user_token = tokenInput.value.trim();
+            }
+        } else if (this.currentUploadType === 'civitai') {
+            apiEndpoint = '/filesystem/download_from_civitai';
+            uploadData.civitai_url = url;
+            delete uploadData.url;
+
+            uploadData.overwrite = this.uploadModal.querySelector('#fs-civitai-overwrite').checked;
+            
+            // Check if user provided CivitAI token
+            const tokenInput = this.uploadModal.querySelector('#fs-civitai-token');
+            if (tokenInput && tokenInput.value.trim()) {
+                uploadData.user_token = tokenInput.value.trim();
+            }
+
+            // Check if user provided custom filename
+            const filenameInput = this.uploadModal.querySelector('#fs-civitai-filename');
+            if (filenameInput && filenameInput.value.trim()) {
+                uploadData.filename = filenameInput.value.trim();
             }
         } else {
             // Handle other types like 'civitai', 'direct-link'
@@ -851,7 +868,11 @@ export class FileSystemManager {
                 
                 if (errorResult.error_type === 'access_restricted') {
                     UIComponents.showUploadMessage(this.uploadModal, errorResult.error, true, true);
-                    UIComponents.showHFTokenInput(this.uploadModal, true);
+                    if (this.currentUploadType === 'civitai') {
+                        UIComponents.showCivitAITokenInput(this.uploadModal, true);
+                    } else {
+                        UIComponents.showHFTokenInput(this.uploadModal, true);
+                    }
                 } else {
                     UIComponents.showUploadMessage(this.uploadModal, errorResult.error || `Request failed: ${response.statusText}`, true);
                 }
@@ -861,17 +882,19 @@ export class FileSystemManager {
                 return;
             }
 
-            // For successful requests, let the poller handle the rest
-            if (this.currentUploadType !== 'google-drive' && this.currentUploadType !== 'huggingface') {
+            // For CivitAI, Google Drive, and Hugging Face, let the poller handle the rest
+            if (this.currentUploadType === 'civitai' || this.currentUploadType === 'google-drive' || this.currentUploadType === 'huggingface') {
+                // Progress polling will handle the response
+            } else {
                 const result = await response.json();
-                this.stopUploadProgressPolling(); // Stop polling for non-GDrive/non-HF types
+                this.stopUploadProgressPolling();
                 if (result.success) {
                     UIComponents.showUploadMessage(this.uploadModal, result.message || 'Upload started successfully.', false);
                     await this.refreshCurrentDirectory();
                 } else {
                     if (result.error_type === 'access_restricted') {
                         UIComponents.showUploadMessage(this.uploadModal, result.error, true, true);
-                        UIComponents.showHFTokenInput(this.uploadModal, true);
+                        UIComponents.showCivitAITokenInput(this.uploadModal, true);
                     } else {
                         UIComponents.showUploadMessage(this.uploadModal, result.error || 'Upload failed.', true);
                     }
@@ -888,7 +911,6 @@ export class FileSystemManager {
         }
     }
 
-
     startUploadProgressPolling(sessionId, uploadType) {
         if (this.uploadProgressInterval) {
             clearInterval(this.uploadProgressInterval);
@@ -899,6 +921,8 @@ export class FileSystemManager {
             progressApiEndpoint = `/filesystem/google_drive_progress/${this.currentUploadSessionId}`;
         } else if (uploadType === 'huggingface') {
             progressApiEndpoint = `/filesystem/huggingface_progress/${this.currentUploadSessionId}`;
+        } else if (uploadType === 'civitai') {
+            progressApiEndpoint = `/filesystem/civitai_progress/${this.currentUploadSessionId}`;
         } else {
             return; // No polling for other types
         }
@@ -912,7 +936,6 @@ export class FileSystemManager {
                 const progressResponse = await api.fetchApi(progressApiEndpoint);
                 const progress = await progressResponse.json();
 
-                // Always update progress display
                 UIComponents.showUploadProgress(this.uploadModal, progress.message, progress.percentage);
 
                 if (progress.status === 'completed' || progress.status === 'error' || progress.status === 'access_restricted') {
@@ -925,7 +948,11 @@ export class FileSystemManager {
                     } else if (progress.status === 'access_restricted') {
                         // Show access restricted message with HTML support and show token input
                         UIComponents.showUploadMessage(this.uploadModal, progress.message, true, true);
-                        UIComponents.showHFTokenInput(this.uploadModal, true);
+                        if (uploadType === 'civitai') {
+                            UIComponents.showCivitAITokenInput(this.uploadModal, true);
+                        } else {
+                            UIComponents.showHFTokenInput(this.uploadModal, true);
+                        }
                         this.setUploadButtonState(true); // Re-enable button for retry with token
                     } else { // error
                         UIComponents.showUploadMessage(this.uploadModal, `❌ ${progress.message || 'An error occurred.'}`, true);

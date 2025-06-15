@@ -447,11 +447,25 @@ export class UIComponents {
             },
             'civitai': {
                 title: 'Upload from Civitai',
-                urlPlaceholder: 'Enter Civitai model URL...',
-                extraFields: `
+                urlPlaceholder: 'Enter Civitai model ID, URL, or download link...',
+                urlLabelText: 'Civitai Model ID/URL:',
+                extraFieldsHTML: `
                     <div class="fs-form-group">
-                        <label for="fs-civitai-token">API Token (optional):</label>
-                        <input type="password" id="fs-civitai-token" class="fs-form-input" placeholder="Civitai API token for private models">
+                        <label for="fs-civitai-filename">Custom Filename (optional):</label>
+                        <input type="text" id="fs-civitai-filename" class="fs-form-input" placeholder="Leave empty to use original filename">
+                    </div>
+                    <div class="fs-form-group fs-checkbox-form-group">
+                        <div class="fs-checkbox-group">
+                            <input type="checkbox" id="fs-civitai-overwrite" style="width: auto;">
+                            <label for="fs-civitai-overwrite" style="margin-bottom: 0;">Overwrite existing files</label>
+                        </div>
+                    </div>
+                    <div class="fs-form-group" id="fs-civitai-token-group" style="display: none;">
+                        <label for="fs-civitai-token">Your CivitAI API Token:</label>
+                        <input type="password" id="fs-civitai-token" class="fs-form-input" placeholder="API token for private/restricted models">
+                        <small style="color: var(--input-text); opacity: 0.7; font-size: 12px; margin-top: 4px; display: block;">
+                            We don't store your token. It's only used for this download.
+                        </small>
                     </div>
                 `
             },
@@ -526,6 +540,13 @@ export class UIComponents {
 
     static showHFTokenInput(modal, show = true) {
         const tokenGroup = modal.querySelector('#fs-hf-token-group');
+        if (tokenGroup) {
+            tokenGroup.style.display = show ? 'block' : 'none';
+        }
+    }
+
+    static showCivitAITokenInput(modal, show = true) {
+        const tokenGroup = modal.querySelector('#fs-civitai-token-group');
         if (tokenGroup) {
             tokenGroup.style.display = show ? 'block' : 'none';
         }

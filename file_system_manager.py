@@ -16,6 +16,8 @@ from .download_endpoints import FileSystemDownloadAPI
 from .google_drive_handler import GoogleDriveDownloaderAPI, progress_store as gdrive_progress_store
 # Import Hugging Face Handler
 from .huggingface_handler import HuggingFaceDownloadAPI, hf_progress_store
+# Import CivitAI Handler
+from .civitai_handler import CivitAIDownloadAPI, civitai_progress_store
 
 
 class FileSystemManagerAPI:
@@ -286,6 +288,9 @@ google_drive_download_api = GoogleDriveDownloaderAPI()
 # Initialize Hugging Face Handler API
 hf_download_api = HuggingFaceDownloadAPI()
 
+# Initialize CivitAI Handler API
+civitai_download_api = CivitAIDownloadAPI()
+
 @server.PromptServer.instance.routes.get("/filesystem/browse")
 async def browse_directory(request):
     """API endpoint for browsing directories"""
@@ -500,6 +505,69 @@ async def get_huggingface_progress_endpoint(request):
     try:
         session_id = request.match_info['session_id']
         progress = hf_progress_store.get(session_id, {"status": "not_found", "message": "Session not found", "percentage": 0})
+        return web.json_response(progress)
+    except Exception as e:
+        return web.json_response(
+            {"status": "error", "message": str(e), "percentage": 0},
+            status=500
+        )
+
+@server.PromptServer.instance.routes.post("/filesystem/download_from_civitai")
+async def download_from_civitai_endpoint(request):
+    """API endpoint for downloading models from CivitAI"""
+    try:
+        data = await request.json()
+        civitai_url = data.get('civitai_url')
+        target_fsm_path = data.get('path')
+        filename = data.get('filename')
+        overwrite = data.get('overwrite', False)
+        session_id = data.get('session_id')
+        user_token = data.get('user_token')
+
+        if not all([civitai_url, target_fsm_path is not None, session_id]):
+            return web.json_response({'success': False, 'error': 'Missing required fields for CivitAI download.'}, status=400)
+
+        # Resolve FSM relative path to check if it's valid
+        path_parts = target_fsm_path.strip('/').split('/')
+        if not path_parts or path_parts[0] not in file_system_api.allowed_directories:
+             return web.json_response({'success': False, 'error': 'Invalid target path for CivitAI download.'}, status=400)
+        
+        # Construct absolute path to check if it's a directory and allowed
+        abs_target_dir_check = file_system_api.allowed_directories[path_parts[0]]
+        for part in path_parts[1:]:
+            abs_target_dir_check = abs_target_dir_check / part
+        
+        if not file_system_api.is_path_allowed(abs_target_dir_check):
+             return web.json_response({'success': False, 'error': 'Target directory for CivitAI download is not allowed.'}, status=400)
+        
+        # If abs_target_dir_check exists, it must be a directory
+        if abs_target_dir_check.exists() and not abs_target_dir_check.is_dir():
+            return web.json_response({'success': False, 'error': 'Target path for CivitAI download exists and is not a directory.'}, status=400)
+
+        result = await civitai_download_api.download_from_civitai(
+            civitai_url=civitai_url,
+            target_fsm_path=target_fsm_path,
+            filename=filename,
+            overwrite=overwrite,
+            session_id=session_id,
+            user_token=user_token
+        )
+        return web.json_response(result)
+        
+    except Exception as e:
+        print(f"Error in /filesystem/download_from_civitai: {e}")
+        # Ensure session progress reflects the error
+        session_id = data.get('session_id') if 'data' in locals() and isinstance(data, dict) else None
+        if session_id:
+            civitai_progress_store[session_id] = {"status": "error", "message": str(e), "percentage": 0}
+        return web.json_response({'success': False, 'error': str(e)}, status=500)
+
+@server.PromptServer.instance.routes.get("/filesystem/civitai_progress/{session_id}")
+async def get_civitai_progress_endpoint(request):
+    """API endpoint to get CivitAI download progress"""
+    try:
+        session_id = request.match_info['session_id']
+        progress = civitai_progress_store.get(session_id, {"status": "not_found", "message": "Session not found", "percentage": 0})
         return web.json_response(progress)
     except Exception as e:
         return web.json_response(
