@@ -471,9 +471,21 @@ export class UIComponents {
             },
             'direct-link': {
                 title: 'Upload from Direct Link',
-                urlPlaceholder: 'Enter direct upload URL...',
-                extraFields: ''
-            }
+                urlPlaceholder: 'Enter direct download URL...',
+                urlLabelText: 'Direct Download URL:',
+                extraFieldsHTML: `
+                    <div class="fs-form-group">
+                        <label for="fs-direct-filename">Custom Filename (optional):</label>
+                        <input type="text" id="fs-direct-filename" class="fs-form-input" placeholder="Leave empty to auto-detect from URL">
+                    </div>
+                    <div class="fs-form-group fs-checkbox-form-group">
+                        <div class="fs-checkbox-group">
+                            <input type="checkbox" id="fs-direct-overwrite" style="width: auto;">
+                            <label for="fs-direct-overwrite" style="margin-bottom: 0;">Overwrite existing files</label>
+                        </div>
+                    </div>
+                `
+            },
         };
         
         const config = typeConfig[type] || typeConfig['direct-link'];

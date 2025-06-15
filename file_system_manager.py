@@ -19,6 +19,9 @@ from .huggingface_handler import HuggingFaceDownloadAPI, hf_progress_store
 # Import CivitAI Handler
 from .civitai_handler import CivitAIDownloadAPI, civitai_progress_store
 
+# Import Direct Upload Handler
+from .direct_upload_handler import DirectUploadAPI, direct_upload_progress_store
+
 
 class FileSystemManagerAPI:
     def __init__(self):
@@ -290,6 +293,9 @@ hf_download_api = HuggingFaceDownloadAPI()
 
 # Initialize CivitAI Handler API
 civitai_download_api = CivitAIDownloadAPI()
+
+# Initialize Direct Upload Handler API
+direct_upload_api = DirectUploadAPI()
 
 @server.PromptServer.instance.routes.get("/filesystem/browse")
 async def browse_directory(request):
@@ -611,6 +617,12 @@ async def cancel_download_endpoint(request):
                 "message": "Download cancelled by user", 
                 "percentage": 0
             }
+        elif download_type == 'direct-link':
+            direct_upload_progress_store[session_id] = {
+                "status": "cancelled",
+                "message": "Download cancelled by user",
+                "percentage": 0
+            }
         
         print(f"🚫 Download cancellation requested for session: {session_id} (type: {download_type})")
         
@@ -619,3 +631,64 @@ async def cancel_download_endpoint(request):
     except Exception as e:
         print(f"Error in /filesystem/cancel_download: {e}")
         return web.json_response({'success': False, 'error': str(e)}, status=500)
+
+@server.PromptServer.instance.routes.post("/filesystem/upload_from_direct_url")
+async def upload_from_direct_url_endpoint(request):
+    """API endpoint for uploading files from direct URLs"""
+    try:
+        data = await request.json()
+        direct_url = data.get('direct_url')
+        target_fsm_path = data.get('path')
+        filename = data.get('filename')
+        overwrite = data.get('overwrite', False)
+        session_id = data.get('session_id')
+
+        if not all([direct_url, target_fsm_path is not None, session_id]):
+            return web.json_response({'success': False, 'error': 'Missing required fields for direct URL upload.'}, status=400)
+
+        # Resolve FSM relative path to check if it's valid
+        path_parts = target_fsm_path.strip('/').split('/')
+        if not path_parts or path_parts[0] not in file_system_api.allowed_directories:
+             return web.json_response({'success': False, 'error': 'Invalid target path for direct URL upload.'}, status=400)
+        
+        # Construct absolute path to check if it's a directory and allowed
+        abs_target_dir_check = file_system_api.allowed_directories[path_parts[0]]
+        for part in path_parts[1:]:
+            abs_target_dir_check = abs_target_dir_check / part
+        
+        if not file_system_api.is_path_allowed(abs_target_dir_check):
+             return web.json_response({'success': False, 'error': 'Target directory for direct URL upload is not allowed.'}, status=400)
+        
+        # If abs_target_dir_check exists, it must be a directory
+        if abs_target_dir_check.exists() and not abs_target_dir_check.is_dir():
+            return web.json_response({'success': False, 'error': 'Target path for direct URL upload exists and is not a directory.'}, status=400)
+
+        result = await direct_upload_api.upload_from_direct_url(
+            url=direct_url,
+            target_fsm_path=target_fsm_path,
+            filename=filename,
+            overwrite=overwrite,
+            session_id=session_id
+        )
+        return web.json_response(result)
+        
+    except Exception as e:
+        print(f"Error in /filesystem/upload_from_direct_url: {e}")
+        # Ensure session progress reflects the error
+        session_id = data.get('session_id') if 'data' in locals() and isinstance(data, dict) else None
+        if session_id:
+            direct_upload_progress_store[session_id] = {"status": "error", "message": str(e), "percentage": 0}
+        return web.json_response({'success': False, 'error': str(e)}, status=500)
+
+@server.PromptServer.instance.routes.get("/filesystem/direct_upload_progress/{session_id}")
+async def get_direct_upload_progress_endpoint(request):
+    """API endpoint to get direct upload progress"""
+    try:
+        session_id = request.match_info['session_id']
+        progress = direct_upload_progress_store.get(session_id, {"status": "not_found", "message": "Session not found", "percentage": 0})
+        return web.json_response(progress)
+    except Exception as e:
+        return web.json_response(
+            {"status": "error", "message": str(e), "percentage": 0},
+            status=500
+        )

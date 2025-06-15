@@ -13,7 +13,7 @@ class CivitAIUtils:
         if size_bytes == 0:
             return "0 B"
         
-        units = ["B", "KB", "MB", "GB", "TB", "PB"]
+        units = ["B", "KB", "MB", "GB", "TB"]
         unit_index = 0
         size = float(size_bytes)
         
@@ -99,53 +99,48 @@ class CivitAIUtils:
             
         raise ValueError(f"Invalid CivitAI URL or model ID: {civitai_url}")
 
-    def get_safe_filename(self, filename: str) -> str:
-        """Convert filename to be safe for filesystem"""
-        # Remove or replace problematic characters
-        safe_filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
-        safe_filename = re.sub(r'\s+', '_', safe_filename)  # Replace spaces with underscores
-        safe_filename = safe_filename.strip('._')  # Remove leading/trailing dots and underscores
+    def determine_model_type_from_metadata(self, model_info: dict) -> str:
+        """Determine ComfyUI model type from CivitAI model metadata"""
+        model_type = model_info.get('type', '').lower()
         
-        # Ensure it's not too long
-        if len(safe_filename) > 200:
-            name, ext = os.path.splitext(safe_filename)
-            safe_filename = name[:200-len(ext)] + ext
-        
-        return safe_filename or "civitai_model"
-
-    def determine_model_type_from_metadata(self, metadata: dict) -> str:
-        """Determine the ComfyUI model type from CivitAI metadata"""
-        model_type = metadata.get('type', '').lower()
-        
-        # Map CivitAI types to ComfyUI directories
         type_mapping = {
             'checkpoint': 'checkpoints',
-            'textualinversion': 'embeddings',
-            'hypernetwork': 'hypernetworks',
-            'aestheticgradient': 'embeddings',
             'lora': 'loras',
-            'locon': 'loras',
             'lycoris': 'loras',
             'controlnet': 'controlnet',
+            'vae': 'vae',
+            'embedding': 'embeddings',
+            'textualinversion': 'embeddings',
             'upscaler': 'upscale_models',
-            'vae': 'vae'
+            'poses': 'poses',
+            'wildcards': 'wildcards'
         }
         
-        return type_mapping.get(model_type, 'checkpoints')  # Default to checkpoints
+        return type_mapping.get(model_type, 'checkpoints')
+
+    def get_safe_filename(self, filename: str) -> str:
+        """Generate a safe filename by removing invalid characters"""
+        # Remove invalid characters
+        safe_name = "".join(c for c in filename if c.isalnum() or c in "._- ")
+        safe_name = safe_name.strip()
+        
+        if not safe_name:
+            safe_name = "civitai_model"
+        
+        return safe_name
 
     def create_temp_file(self, filename: str) -> str:
-        """Create a temporary file for downloading"""
-        safe_suffix = f"_{self.get_safe_filename(filename)}"
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=safe_suffix)
-        temp_file_path = temp_file.name
-        temp_file.close()
-        return temp_file_path
+        """Create a temporary file path"""
+        temp_dir = Path(tempfile.gettempdir())
+        safe_filename = self.get_safe_filename(filename)
+        temp_path = temp_dir / f"civitai_temp_{abs(hash(safe_filename)) % 10000}_{safe_filename}"
+        return str(temp_path)
 
-    def cleanup_temp_file(self, file_path: str):
-        """Clean up a temporary file"""
+    def cleanup_temp_file(self, temp_path: str):
+        """Clean up temporary file"""
         try:
-            if file_path and Path(file_path).exists():
-                os.unlink(file_path)
-                print(f"🗑️ Cleaned up temp file: {file_path}")
+            if temp_path and Path(temp_path).exists():
+                Path(temp_path).unlink()
+                print(f"🗑️ Cleaned up temp file: {temp_path}")
         except Exception as e:
-            print(f"⚠️ Failed to clean up temp file {file_path}: {e}")
+            print(f"⚠️ Failed to clean up temp file {temp_path}: {e}")

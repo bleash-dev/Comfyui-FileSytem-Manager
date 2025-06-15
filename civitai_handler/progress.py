@@ -53,7 +53,7 @@ class ProgressTracker:
         """Mark session as cancelled"""
         if session_id:
             civitai_progress_store[session_id] = {
-                "status": "cancelled", 
+                "status": "cancelled",
                 "message": message, 
                 "percentage": 0
             }

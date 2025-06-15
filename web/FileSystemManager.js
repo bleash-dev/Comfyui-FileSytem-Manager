@@ -889,25 +889,28 @@ export class FileSystemManager {
             if (filenameInput && filenameInput.value.trim()) {
                 uploadData.filename = filenameInput.value.trim();
             }
+        } else if (this.currentUploadType === 'direct-link') {
+            apiEndpoint = '/filesystem/upload_from_direct_url';
+            uploadData.direct_url = url;
+            delete uploadData.url;
+
+            uploadData.overwrite = this.uploadModal.querySelector('#fs-direct-overwrite').checked;
+            
+            // Check if user provided custom filename
+            const filenameInput = this.uploadModal.querySelector('#fs-direct-filename');
+            if (filenameInput && filenameInput.value.trim()) {
+                uploadData.filename = filenameInput.value.trim();
+            }
         } else {
-            // Handle other types like 'civitai', 'direct-link'
+            // Handle other types
             if (hasError) { // For non-GDrive, only URL is validated above
                 UIComponents.showUploadMessage(this.uploadModal, errors.join(' '), true);
-                // UIComponents.hideUploadProgress(this.uploadModal);
                 return;
             }
             // For other types, you might have a generic filename input
             const commonFilenameInput = this.uploadModal.querySelector('#fs-upload-filename');
             if (commonFilenameInput) {
                  uploadData.filename = commonFilenameInput.value.trim();
-            }
-            // Add type-specific fields for Hugging Face, Civitai, etc.
-            if (this.currentUploadType === 'huggingface') {
-                // const token = this.uploadModal.querySelector('#fs-hf-token')?.value.trim(); // Token field removed
-                // if (token) uploadData.token = token; // Token field removed
-            } else if (this.currentUploadType === 'civitai') {
-                const token = this.uploadModal.querySelector('#fs-civitai-token')?.value.trim();
-                if (token) uploadData.token = token;
             }
         }
         
@@ -955,8 +958,8 @@ export class FileSystemManager {
                 return;
             }
 
-            // For CivitAI, Google Drive, and Hugging Face, let the poller handle the rest
-            if (this.currentUploadType === 'civitai' || this.currentUploadType === 'google-drive' || this.currentUploadType === 'huggingface') {
+            // For CivitAI, Google Drive, Hugging Face, and Direct Link, let the poller handle the rest
+            if (this.currentUploadType === 'civitai' || this.currentUploadType === 'google-drive' || this.currentUploadType === 'huggingface' || this.currentUploadType === 'direct-link') {
                 // Progress polling will handle the response
             } else {
                 const result = await response.json();
@@ -1032,6 +1035,8 @@ export class FileSystemManager {
             progressApiEndpoint = `/filesystem/huggingface_progress/${this.currentUploadSessionId}`;
         } else if (uploadType === 'civitai') {
             progressApiEndpoint = `/filesystem/civitai_progress/${this.currentUploadSessionId}`;
+        } else if (uploadType === 'direct-link') {
+            progressApiEndpoint = `/filesystem/direct_upload_progress/${this.currentUploadSessionId}`;
         } else {
             return; // No polling for other types
         }
