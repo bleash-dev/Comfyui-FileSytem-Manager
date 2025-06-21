@@ -733,5 +733,197 @@ style.textContent = `
 .fs-upload-form-actions #fs-upload-cancel {
     order: 1; /* Changed from 2 to 1 to move to left */
 }
+
+/* Model download notification styles */
+.fs-model-download-notification {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background: var(--comfy-menu-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 15px;
+    max-width: 400px;
+    z-index: 10002;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.fs-notification-content {
+    position: relative;
+}
+
+.fs-notification-content h4 {
+    margin: 0 0 8px 0;
+    color: var(--input-text);
+    font-size: 14px;
+}
+
+.fs-notification-content p {
+    margin: 0 0 10px 0;
+    color: var(--input-text);
+    font-size: 12px;
+    opacity: 0.8;
+}
+
+.fs-download-list {
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.fs-download-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.fs-download-item:last-child {
+    border-bottom: none;
+}
+
+.fs-model-name {
+    font-size: 11px;
+    color: var(--input-text);
+    word-break: break-all;
+}
+
+.fs-progress-bar {
+    width: 100%;
+    height: 4px;
+    background-color: rgba(255, 255, 255, 0.2);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.fs-progress-fill {
+    height: 100%;
+    background-color: #007bff;
+    transition: width 0.3s ease;
+}
+
+.fs-download-complete .fs-progress-fill {
+    background-color: #28a745;
+}
+
+.fs-notification-content button {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: none;
+    background: #dc3545;
+    color: white;
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Global model specific styles */
+.fs-global-model-available {
+    background-color: rgba(0, 123, 255, 0.05);
+    border-left: 3px solid #007bff;
+}
+
+.fs-global-model-downloaded {
+    background-color: rgba(40, 167, 69, 0.05);
+    border-left: 3px solid #28a745;
+}
+
+.fs-global-model-downloading {
+    background-color: rgba(255, 193, 7, 0.05);
+    border-left: 3px solid #ffc107;
+    animation: downloading 2s linear infinite;
+}
+
+.fs-global-indicator {
+    margin-left: 8px;
+    font-size: 12px;
+    opacity: 0.8;
+}
+
+.fs-download-btn {
+    margin-left: 8px;
+    padding: 2px 6px;
+    font-size: 10px;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.fs-download-btn:hover {
+    background-color: #0056b3;
+}
+
+.fs-download-progress {
+    margin-top: 4px;
+    width: 100%;
+    height: 4px;
+    background-color: rgba(255, 255, 255, 0.2);
+    border-radius: 2px;
+    overflow: hidden;
+    position: relative;
+}
+
+.fs-download-progress-bar {
+    height: 100%;
+    background-color: #007bff;
+    transition: width 0.3s ease;
+}
+
+.fs-download-progress-text {
+    position: absolute;
+    right: 4px;
+    top: -16px;
+    font-size: 10px;
+    color: var(--input-text);
+}
+
+@keyframes downloading {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* Enhanced workflow analysis notification styles */
+.fs-available-info {
+    color: #28a745 !important;
+    font-weight: 500;
+    margin: 0 0 5px 0 !important;
+}
+
+.fs-unavailable-info {
+    color: #dc3545 !important;
+    font-weight: 500;
+    margin: 0 0 10px 0 !important;
+}
+
+.fs-missing-model-item.available {
+    background-color: rgba(40, 167, 69, 0.1);
+    border-left: 2px solid #28a745;
+    padding-left: 6px;
+}
+
+.fs-missing-model-item.unavailable {
+    background-color: rgba(220, 53, 69, 0.1);
+    border-left: 2px solid #dc3545;
+    padding-left: 6px;
+}
+
+.fs-missing-model-item .fs-model-name {
+    font-family: monospace;
+    font-size: 10px;
+    max-width: 250px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 `;
 document.head.appendChild(style);
+    

@@ -210,7 +210,7 @@ export class UIComponents {
         }
     }
 
-    static renderContents(modal, contents, onItemClick, onNavigateLinkClick, onActionTriggerClick) {
+    static renderContents(modal, contents, onItemClick, onNavigateLinkClick, onActionTriggerClick, onGlobalModelDownload) {
         const tbody = modal.querySelector('#fs-table-body');
         tbody.innerHTML = '';
         
@@ -218,38 +218,30 @@ export class UIComponents {
             const row = document.createElement('tr');
             row.dataset.path = item.path;
             
-            // Name column with icon
-            const nameCell = document.createElement('td');
-            const nameDiv = document.createElement('div');
-            nameDiv.className = 'fs-item';
-            
-            const icon = document.createElement('span');
-            icon.textContent = item.type === 'directory' ? '📁' : '📄';
-            icon.className = 'fs-item-icon';
-            
-            const nameSpan = document.createElement('span');
-            if (item.type === 'directory') {
-                nameSpan.className = 'fs-item-name-link';
-                nameSpan.textContent = item.name;
-                nameSpan.addEventListener('click', (e) => {
-                    e.stopPropagation(); // Prevent row click from firing immediately if not desired
-                    onNavigateLinkClick(item.path);
-                });
-            } else {
-                nameSpan.textContent = item.name;
+            // Add special classes for global models
+            if (item.global_exists && !item.local_exists) {
+                row.classList.add('fs-global-model-available');
+            } else if (item.global_exists && item.local_exists) {
+                row.classList.add('fs-global-model-downloaded');
             }
             
-            nameDiv.appendChild(icon);
-            nameDiv.appendChild(nameSpan);
-            nameCell.appendChild(nameDiv);
+            // Name column
+            const nameCell = document.createElement('td');
+            nameCell.innerHTML = `
+                <div class="fs-item">
+                    ${this.getItemIcon(item)}
+                    ${this.getItemNameElement(item, onNavigateLinkClick, onGlobalModelDownload)}
+                    ${this.getGlobalModelIndicator(item)}
+                </div>
+            `;
             
             // Type column
             const typeCell = document.createElement('td');
-            typeCell.textContent = item.type === 'directory' ? 'Folder' : 'File';
+            typeCell.textContent = item.type;
             
             // Size column
             const sizeCell = document.createElement('td');
-            sizeCell.textContent = item.size !== null ? UIComponents.formatFileSize(item.size) : '-';
+            sizeCell.textContent = item.type === 'file' ? this.formatFileSize(item.size) : '-';
             
             // Modified column
             const modifiedCell = document.createElement('td');
@@ -257,67 +249,82 @@ export class UIComponents {
             
             // Actions column
             const actionsCell = document.createElement('td');
-            actionsCell.style.textAlign = 'center';
-            const actionTrigger = document.createElement('span');
-            actionTrigger.className = 'fs-item-actions-trigger';
-            actionTrigger.innerHTML = `
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>
-                </svg>
+            actionsCell.innerHTML = `
+                <span class="fs-item-actions-trigger">⋮</span>
             `;
-            actionTrigger.title = "Actions";
+            
+            // Event listeners
+            row.addEventListener('click', (e) => onItemClick(item, e));
+            
+            const actionTrigger = actionsCell.querySelector('.fs-item-actions-trigger');
             actionTrigger.addEventListener('click', (e) => {
-                e.stopPropagation(); // Prevent row click event
-                onActionTriggerClick(item, e.currentTarget);
+                e.stopPropagation();
+                onActionTriggerClick(item, actionTrigger);
             });
-            actionsCell.appendChild(actionTrigger);
-
+            
+            // Add download button event listener for global models
+            if (item.global_exists && !item.local_exists && onGlobalModelDownload) {
+                const downloadBtn = nameCell.querySelector('.fs-download-btn');
+                if (downloadBtn) {
+                    downloadBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        onGlobalModelDownload(item);
+                    });
+                }
+            }
+            
             row.appendChild(nameCell);
             row.appendChild(typeCell);
             row.appendChild(sizeCell);
             row.appendChild(modifiedCell);
             row.appendChild(actionsCell);
             
-            // Event listeners for selection
-            row.addEventListener('click', (e) => {
-                onItemClick(item, e); 
-            });
-            
-            // No dblclick for navigation on row, link handles it.
-            
             tbody.appendChild(row);
         }
     }
 
-    static createItemContextMenu(actions, onActionClick) {
-        const menu = document.createElement('div');
-        menu.className = 'fs-item-context-menu';
-        
-        actions.forEach(action => {
-            const menuItem = document.createElement('div');
-            menuItem.className = 'fs-item-context-menu-item';
-            menuItem.dataset.action = action.id;
-            // menuItem.textContent = action.label; // Using innerHTML for icons
-            menuItem.innerHTML = `${action.icon || ''} ${action.label}`;
-            menuItem.addEventListener('click', (e) => {
-                e.stopPropagation();
-                onActionClick(action.id);
-            });
-            menu.appendChild(menuItem);
-        });
-        
-        return menu;
+    static getItemNameElement(item, onNavigateLinkClick, onGlobalModelDownload) {
+        if (item.type === 'directory') {
+            return `<a href="#" class="fs-item-name-link" data-path="${item.path}">${item.name}</a>`;
+        } else if (item.downloadable && item.global_exists && !item.local_exists && onGlobalModelDownload) {
+            // Global model that can be downloaded
+            return `
+                <span class="fs-item-name fs-global-model-name">
+                    ${item.name}
+                    <button class="fs-download-btn" data-model-path="${item.s3_path || item.path}">
+                        📥 Download
+                    </button>
+                </span>
+            `;
+        } else {
+            return `<span class="fs-item-name">${item.name}</span>`;
+        }
     }
 
-    static updateSelection(modal, selectedItems) {
-        const rows = modal.querySelectorAll('#fs-table-body tr');
-        rows.forEach(row => {
-            if (selectedItems.has(row.dataset.path)) {
-                row.classList.add('fs-item-selected');
-            } else {
-                row.classList.remove('fs-item-selected');
+    static getGlobalModelIndicator(item) {
+        if (item.downloadable && item.global_exists && !item.local_exists) {
+            return '<span class="fs-global-indicator" title="Available in global storage">🌐</span>';
+        } else if (item.downloadable && item.global_exists && item.local_exists) {
+            return '<span class="fs-global-indicator" title="Downloaded from global storage">✅</span>';
+        } else if (item.global_exists && !item.downloadable) {
+            return '<span class="fs-global-indicator" title="Global category available">🌐</span>';
+        }
+        return '';
+    }
+
+    static getItemIcon(item) {
+        if (item.type === 'directory') {
+            if (item.global_exists && !item.local_exists) {
+                return '<span class="fs-item-icon">🌐</span>'; // Global directory
             }
-        });
+            return '<span class="fs-item-icon">📁</span>';
+        } else {
+            const extension = item.name.split('.').pop().toLowerCase();
+            if (['safetensors', 'ckpt', 'pt', 'pth', 'bin'].includes(extension)) {
+                return '<span class="fs-item-icon">🤖</span>'; // AI model file
+            }
+            return '<span class="fs-item-icon">📄</span>';
+        }
     }
 
     static updateActions(modal, hasSelectedItems) {
@@ -583,6 +590,36 @@ export class UIComponents {
         if (tokenGroup) {
             tokenGroup.style.display = show ? 'block' : 'none';
         }
+    }
+
+    static createItemContextMenu(actions, onAction) {
+        const menu = document.createElement('div');
+        menu.className = 'fs-item-context-menu';
+        
+        actions.forEach(action => {
+            const item = document.createElement('div');
+            item.className = 'fs-item-context-menu-item';
+            item.innerHTML = `
+                <span>${action.icon}</span>
+                <span>${action.label}</span>
+            `;
+            item.addEventListener('click', () => onAction(action.id));
+            menu.appendChild(item);
+        });
+        
+        return menu;
+    }
+
+    static updateSelection(modal, selectedItems) {
+        const rows = modal.querySelectorAll('#fs-table-body tr');
+        rows.forEach(row => {
+            const path = row.dataset.path;
+            if (selectedItems.has(path)) {
+                row.classList.add('fs-item-selected');
+            } else {
+                row.classList.remove('fs-item-selected');
+            }
+        });
     }
 
     static formatFileSize(bytes) {

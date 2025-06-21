@@ -1,15 +1,23 @@
 import os
 import json
+import asyncio
+import tempfile
 import shutil
 from pathlib import Path
-from typing import List, Dict, Any
-from urllib.parse import unquote # For decoding URL encoded paths
-
-# Import aiohttp web for responses
 from aiohttp import web
-import folder_paths # Ensure folder_paths is imported
-import server # Ensure server is imported
+import folder_paths
+from server import PromptServer
 
+# Import the new global models manager
+try:
+    from .global_models_manager import GlobalModelsManager
+    global_models_manager = GlobalModelsManager()
+except ImportError:
+    print("Global models manager not available")
+    global_models_manager = None
+
+# Global progress tracking for downloads
+download_progress = {}
 
 # Import download endpoints
 from .download_endpoints import FileSystemDownloadAPI
@@ -694,3 +702,174 @@ async def get_direct_upload_progress_endpoint(request):
             {"status": "error", "message": str(e), "percentage": 0},
             status=500
         )
+
+# Add new endpoints for global models management
+
+@PromptServer.instance.routes.get("/filesystem/global_models_structure")
+async def get_global_models_structure(request):
+    try:
+        if not global_models_manager:
+            return web.json_response({
+                "success": False,
+                "error": "Global models manager not available"
+            }, status=500)
+            
+        force_refresh = request.query.get('force_refresh', 'false').lower() == 'true'
+        structure = await global_models_manager.get_global_models_structure(force_refresh)
+        
+        return web.json_response({
+            "success": True,
+            "structure": structure
+        })
+    except Exception as e:
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+@PromptServer.instance.routes.post("/filesystem/download_global_model")
+async def download_global_model(request):
+    try:
+        if not global_models_manager:
+            return web.json_response({
+                "success": False,
+                "error": "Global models manager not available"
+            }, status=500)
+            
+        data = await request.json()
+        model_path = data.get('model_path')
+        
+        if not model_path:
+            return web.json_response({
+                "success": False,
+                "error": "Model path is required"
+            }, status=400)
+        
+        # Start download in background
+        asyncio.create_task(
+            global_models_manager.download_model(
+                model_path, 
+                lambda current: update_download_progress(model_path, current, None)
+            )
+        )
+        
+        return web.json_response({
+            "success": True,
+            "message": f"Download started for {model_path}",
+            "model_path": model_path
+        })
+    except Exception as e:
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+@PromptServer.instance.routes.get("/filesystem/download_progress")
+async def get_download_progress(request):
+    try:
+        return web.json_response({
+            "success": True,
+            "progress": download_progress
+        })
+    except Exception as e:
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+@PromptServer.instance.routes.post("/filesystem/sync_new_model")
+async def sync_new_model(request):
+    """Sync a newly downloaded model to global shared storage"""
+    try:
+        if not global_models_manager:
+            return web.json_response({
+                "success": False,
+                "error": "Global models manager not available"
+            }, status=500)
+            
+        data = await request.json()
+        model_path = data.get('model_path')
+        
+        if not model_path:
+            return web.json_response({
+                "success": False,
+                "error": "Model path is required"
+            }, status=400)
+        
+        success = await global_models_manager.sync_new_model_to_global(model_path)
+        
+        return web.json_response({
+            "success": success,
+            "message": f"Model {'synced' if success else 'failed to sync'} to global storage"
+        })
+    except Exception as e:
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+def update_download_progress(model_path, current, total):
+    """Update download progress for a model"""
+    if total and total > 0:
+        percentage = (current / total) * 100
+    else:
+        # For cases where we don't know total size, use file size as indicator
+        percentage = min(100, (current / (1024 * 1024 * 100)) * 100)  # Assume 100MB as rough estimate
+    
+    download_progress[model_path] = {
+        "current": current,
+        "total": total,
+        "percentage": percentage,
+        "status": "downloading" if percentage < 100 else "completed"
+    }
+
+# Modify the existing browse endpoint
+@PromptServer.instance.routes.get("/filesystem/browse")
+async def browse_filesystem(request):
+    try:
+        path = request.query.get('path', '')
+        print(f"Browse request for path: '{path}'")
+        
+        base_path = Path(folder_paths.base_path)
+        current_path = base_path / path if path else base_path
+        
+        # Check if we're browsing the models directory or its subdirectories
+        is_models_path = path == 'models' or (path.startswith('models/') and path.count('/') == 1)
+        
+        if is_models_path and global_models_manager:
+            # Use global models manager for enhanced model browsing
+            category_path = path[7:] if path.startswith('models/') else ""  # Remove 'models/' prefix
+            contents = global_models_manager.get_enhanced_directory_contents(category_path)
+        else:
+            # Regular directory browsing for non-models paths
+            contents = []
+            if current_path.exists() and current_path.is_dir():
+                for item in current_path.iterdir():
+                    if item.name.startswith('.'):
+                        continue
+                    
+                    relative_path = str(item.relative_to(base_path))
+                    contents.append({
+                        "name": item.name,
+                        "path": relative_path,
+                        "type": "directory" if item.is_dir() else "file",
+                        "size": item.stat().st_size if item.is_file() else 0,
+                        "modified": item.stat().st_mtime,
+                        "local_exists": True,
+                        "global_exists": False,
+                        "downloadable": False
+                    })
+        
+        return web.json_response({
+            "success": True,
+            "path": path,
+            "contents": contents
+        })
+        
+    except Exception as e:
+        print(f"Error browsing path '{path}': {e}")
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+    

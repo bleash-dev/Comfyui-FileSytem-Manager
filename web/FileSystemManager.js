@@ -17,6 +17,15 @@ export class FileSystemManager {
         this.currentUploadType = null;
         this.activeContextMenu = { itemPath: null, element: null }; // For context menu
         this.boundHandleDocumentClick = this.handleDocumentClick.bind(this); // For closing context menu
+        this.globalModelsStructure = null;
+        this.downloadProgress = {};
+        this.workflowMonitor = {
+            enabled: true,
+            autoDownload: true,
+            lastAnalysis: null
+        };
+        this.startGlobalModelsMonitoring();
+        this.startWorkflowMonitoring();
     }
 
     createModal() {
@@ -342,8 +351,9 @@ export class FileSystemManager {
             this.modal,
             this.currentContents,
             (item, e) => this.handleItemClick(item, e),
-            (path) => this.navigateToPath(path), // Pass navigation handler for name links
-            (item, triggerElement) => this.showItemContextMenu(item, triggerElement) // For action trigger
+            (path) => this.navigateToPath(path),
+            (item, triggerElement) => this.showItemContextMenu(item, triggerElement),
+            (item) => this.handleGlobalModelDownload(item) // Add global model download handler
         );
         
         this.updateItemCount();
@@ -1231,5 +1241,340 @@ export class FileSystemManager {
 
     async refreshCurrentDirectory() {
         await this.navigateToPath(this.currentPath);
+    }
+
+    startGlobalModelsMonitoring() {
+        // Monitor download progress for global models
+        setInterval(() => {
+            this.updateGlobalModelDownloadProgress();
+        }, 1000); // Update every second
+    }
+
+    startWorkflowMonitoring() {
+        // Monitor workflow changes in localStorage
+        let lastWorkflowString = localStorage.getItem("workflow");
+        
+        setInterval(async () => {
+            try {
+                const currentWorkflowString = localStorage.getItem("workflow");
+                
+                // Check if workflow changed
+                if (currentWorkflowString !== lastWorkflowString) {
+                    lastWorkflowString = currentWorkflowString;
+                    
+                    if (currentWorkflowString && this.workflowMonitor.enabled) {
+                        await this.analyzeCurrentWorkflow();
+                    }
+                }
+            } catch (error) {
+                console.error('Error in workflow monitoring:', error);
+            }
+        }, 2000); // Check every 2 seconds
+    }
+
+    async analyzeCurrentWorkflow() {
+        try {
+            const workflowJSON = localStorage.getItem("workflow");
+            if (!workflowJSON) return;
+            
+            const workflow = JSON.parse(workflowJSON);
+            
+            const response = await api.fetchApi('/filesystem/analyze_workflow', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ workflow: workflow })
+            });
+            
+            const result = await response.json();
+            if (result.success) {
+                this.workflowMonitor.lastAnalysis = result.analysis;
+                
+                // Show notification if there are missing models
+                if (result.analysis.missing_models > 0) {
+                    this.showWorkflowAnalysisNotification(result.analysis);
+                }
+                
+                console.log('Workflow analysis:', result.analysis);
+            }
+        } catch (error) {
+            console.error('Error analyzing workflow:', error);
+        }
+    }
+
+    showWorkflowAnalysisNotification(analysis) {
+        // Remove existing notification
+        const existingNotification = document.querySelector('.fs-workflow-notification');
+        if (existingNotification) {
+            existingNotification.remove();
+        }
+        
+        // Create notification with more detailed info
+        const notification = document.createElement('div');
+        notification.className = 'fs-workflow-notification';
+        
+        const availableCount = analysis.available_for_download || 0;
+        const unavailableCount = analysis.unavailable_models || 0;
+        
+        notification.innerHTML = `
+            <div class="fs-notification-content">
+                <h4>🔍 Workflow Analysis</h4>
+                <p>Found ${analysis.missing_models} missing model(s) out of ${analysis.total_models} total</p>
+                ${availableCount > 0 ? `<p class="fs-available-info">📥 ${availableCount} available for download</p>` : ''}
+                ${unavailableCount > 0 ? `<p class="fs-unavailable-info">❌ ${unavailableCount} not available globally</p>` : ''}
+                
+                <div class="fs-missing-models-list">
+                    ${analysis.missing_list.map(model => {
+                        const isAvailable = analysis.global_availability[model];
+                        const modelInfo = analysis.available_models && analysis.available_models[model];
+                        const sizeInfo = modelInfo && modelInfo.size ? ` (${this.formatFileSize(modelInfo.size)})` : '';
+                        
+                        return `
+                            <div class="fs-missing-model-item ${isAvailable ? 'available' : 'unavailable'}">
+                                <span class="fs-model-name" title="${model}">${model}${sizeInfo}</span>
+                                ${isAvailable ? 
+                                    `<button class="fs-download-model-btn" data-model="${model}">📥 Download</button>` :
+                                    `<span class="fs-not-available">❌ Not Available</span>`
+                                }
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+                
+                <div class="fs-notification-actions">
+                    ${availableCount > 0 ?
+                        `<button class="fs-download-all-btn">📥 Download All Available (${availableCount})</button>` : ''
+                    }
+                    <button class="fs-close-notification-btn">×</button>
+                </div>
+            </div>
+        `;
+        
+        // Add event listeners
+        notification.querySelector('.fs-close-notification-btn').addEventListener('click', () => {
+            notification.remove();
+        });
+        
+        const downloadAllBtn = notification.querySelector('.fs-download-all-btn');
+        if (downloadAllBtn) {
+            downloadAllBtn.addEventListener('click', () => {
+                this.downloadAllMissingModels();
+            });
+        }
+        
+        notification.querySelectorAll('.fs-download-model-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const modelPath = e.target.dataset.model;
+                this.downloadSingleMissingModel(modelPath);
+            });
+        });
+        
+        document.body.appendChild(notification);
+        
+        // Auto-hide after 15 seconds if there are many models
+        const autoHideDelay = analysis.missing_models > 5 ? 15000 : 10000;
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.remove();
+            }
+        }, autoHideDelay);
+    }
+
+    formatFileSize(bytes) {
+        if (bytes === 0) return '0 B';
+        
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    async downloadAllMissingModels() {
+        try {
+            const response = await api.fetchApi('/filesystem/auto_download_missing', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            });
+            
+            const result = await response.json();
+            if (result.success) {
+                console.log('Auto-download results:', result.download_results);
+                
+                // Show success message
+                this.showNotificationMessage(
+                    `Started downloading ${Object.keys(result.download_results).length} models`
+                );
+                
+                // Re-analyze workflow after a delay
+                setTimeout(() => {
+                    this.analyzeCurrentWorkflow();
+                }, 3000);
+            }
+        } catch (error) {
+            console.error('Error downloading missing models:', error);
+            this.showNotificationMessage('Error downloading models', true);
+        }
+    }
+
+    async downloadSingleMissingModel(modelPath) {
+        try {
+            const success = await this.downloadGlobalModel(modelPath);
+            
+            if (success) {
+                this.showNotificationMessage(`Started downloading ${modelPath}`);
+                
+                // Re-analyze workflow after a delay
+                setTimeout(() => {
+                    this.analyzeCurrentWorkflow();
+                }, 3000);
+            } else {
+                this.showNotificationMessage(`Failed to start download for ${modelPath}`, true);
+            }
+        } catch (error) {
+            console.error('Error downloading single model:', error);
+            this.showNotificationMessage(`Error downloading ${modelPath}`, true);
+        }
+    }
+
+    showNotificationMessage(message, isError = false) {
+        const notification = document.createElement('div');
+        notification.className = `fs-notification-message ${isError ? 'fs-error' : 'fs-success'}`;
+        notification.textContent = message;
+        
+        document.body.appendChild(notification);
+        
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.remove();
+            }
+        }, 3000);
+    }
+
+    async getWorkflowMonitorStatus() {
+        try {
+            const response = await api.fetchApi('/filesystem/workflow_monitor_status');
+            const result = await response.json();
+            if (result.success) {
+                return result.status;
+            }
+        } catch (error) {
+            console.error('Error getting workflow monitor status:', error);
+        }
+        return null;
+    }
+
+    async toggleAutoDownload(enabled) {
+        try {
+            const response = await api.fetchApi('/filesystem/toggle_auto_download', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled: enabled })
+            });
+            
+            const result = await response.json();
+            if (result.success) {
+                this.workflowMonitor.enabled = enabled;
+                // Update UI or notify user if needed
+            }
+        } catch (error) {
+            console.error('Error toggling auto-download:', error);
+        }
+    }
+
+    async updateGlobalModelDownloadProgress() {
+        try {
+            const response = await api.fetchApi('/filesystem/global_model_download_progress');
+            const result = await response.json();
+            
+            if (result.success) {
+                this.downloadProgress = result.progress;
+                
+                // Update UI elements for each global model
+                for (const [modelPath, progress] of Object.entries(result.progress)) {
+                    const modelElement = document.querySelector(`.fs-model-item[data-path="${modelPath}"]`);
+                    if (modelElement) {
+                        const progressBar = modelElement.querySelector('.fs-download-progress-bar');
+                        if (progressBar) {
+                            progressBar.style.width = `${progress.percentage}%`;
+                            progressBar.setAttribute('aria-valuenow', progress.percentage);
+                            
+                            const progressText = modelElement.querySelector('.fs-download-progress-text');
+                            if (progressText) {
+                                progressText.textContent = `${progress.downloaded} / ${progress.total} (${progress.percentage}%)`;
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Error updating global model download progress:', error);
+        }
+    }
+
+    async handleGlobalModelDownload(item) {
+        // Check if the item is a global model and needs downloading
+        if (item.type === 'file' && item.path.startsWith('global/')) {
+            const progress = this.downloadProgress[item.path];
+            if (progress && progress.status === 'downloading') {
+                // Already downloading, just return
+                return;
+            }
+            
+            // Start download
+            try {
+                const response = await api.fetchApi('/filesystem/download_global_model', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: item.path })
+                });
+                
+                const result = await response.json();
+                if (result.success) {
+                    UIComponents.showMessage(this.modal, `Started downloading global model: ${item.path}`, false);
+                    this.startGlobalModelDownloadProgress(item.path);
+                } else {
+                    UIComponents.showMessage(this.modal, `Error starting download: ${result.error}`, true);
+                }
+            } catch (error) {
+                UIComponents.showMessage(this.modal, `Error starting download: ${error.message}`, true);
+            }
+        }
+    }
+
+    startGlobalModelDownloadProgress(modelPath) {
+        const updateInterval = setInterval(async () => {
+            try {
+                const response = await api.fetchApi('/filesystem/global_model_download_progress');
+                const result = await response.json();
+                
+                if (result.success) {
+                    this.downloadProgress = result.progress;
+                    
+                    const progress = result.progress[modelPath];
+                    if (progress) {
+                        const modelElement = document.querySelector(`.fs-model-item[data-path="${modelPath}"]`);
+                        if (modelElement) {
+                            const progressBar = modelElement.querySelector('.fs-download-progress_bar');
+                            if (progressBar) {
+                                progressBar.style.width = `${progress.percentage}%`;
+                                progressBar.setAttribute('aria-valuenow', progress.percentage);
+                                
+                                const progressText = modelElement.querySelector('.fs-download-progress_text');
+                                if (progressText) {
+                                    progressText.textContent = `${progress.downloaded} / ${progress.total} (${progress.percentage}%)`;
+                                }
+                            }
+                        }
+                        
+                        if (progress.status === 'completed' || progress.status === 'error') {
+                            clearInterval(updateInterval);
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('Error updating global model download progress:', error);
+                clearInterval(updateInterval);
+            }
+        }, 1000);
     }
 }
