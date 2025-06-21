@@ -1,4 +1,5 @@
 import os
+import subprocess
 import json
 import asyncio
 import tempfile
@@ -872,4 +873,3 @@ async def browse_filesystem(request):
             "success": False,
             "error": str(e)
         }, status=500)
-    

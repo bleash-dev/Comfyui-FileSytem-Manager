@@ -4,6 +4,7 @@ import asyncio
 import re
 from pathlib import Path
 from typing import Dict, List, Set, Optional, Tuple
+import subprocess
 import folder_paths
 from server import PromptServer
 from aiohttp import web
@@ -24,6 +25,29 @@ class WorkflowMonitor:
         self.auto_download_enabled = True
         self.missing_models = set()
         self.model_categories = self._get_model_categories()
+        self.aws_configured = self._check_aws_configuration()
+        
+    def _check_aws_configuration(self):
+        """Check if AWS CLI is configured"""
+        try:
+            result = subprocess.run(['aws', 's3', 'ls'], 
+                                  capture_output=True, text=True, timeout=10)
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def _run_aws_command(self, command, timeout=30):
+        """Run AWS CLI command with error handling"""
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+            if result.returncode == 0:
+                return True, result.stdout
+            else:
+                return False, result.stderr
+        except subprocess.TimeoutExpired:
+            return False, "Command timed out"
+        except Exception as e:
+            return False, str(e)
         
     def _get_model_categories(self) -> List[str]:
         """Get all model categories from folder_paths"""
@@ -214,7 +238,7 @@ class WorkflowMonitor:
     
     async def get_available_global_models(self, missing_models: Set[str]) -> Dict[str, dict]:
         """Check which missing models are available in global storage with full info"""
-        if not global_models_manager:
+        if not global_models_manager or not self.aws_configured:
             return {}
             
         available = {}
@@ -250,12 +274,17 @@ class WorkflowMonitor:
         return available
     
     async def auto_download_missing_models(self, missing_models: Set[str]) -> Dict[str, str]:
-        """Download only missing models that are available globally"""
-        if not global_models_manager or not self.auto_download_enabled:
+        """Download only missing models that are available globally using AWS CLI"""
+        if not global_models_manager or not self.auto_download_enabled or not self.aws_configured:
             return {}
             
         download_results = {}
         available_models = await self.get_available_global_models(missing_models)
+        
+        bucket = os.environ.get('AWS_BUCKET_NAME')
+        if not bucket:
+            print("AWS_BUCKET_NAME not set, cannot download models")
+            return {}
         
         for model_path, model_info in available_models.items():
             if model_info.get('available', False):
@@ -268,14 +297,22 @@ class WorkflowMonitor:
                 
                 try:
                     print(f"🔄 Auto-downloading missing model: {model_path}")
-                    success = await global_models_manager.download_model(model_path)
+                    
+                    # Create local directory if it doesn't exist
+                    local_path.parent.mkdir(parents=True, exist_ok=True)
+                    
+                    # Use AWS CLI to download
+                    s3_path = f"s3://{bucket}/pod_sessions/global_shared/models/{model_path}"
+                    command = ['aws', 's3', 'cp', s3_path, str(local_path)]
+                    
+                    success, output = self._run_aws_command(command, timeout=600)  # 10 minute timeout
                     
                     if success:
                         download_results[model_path] = "downloaded"
                         print(f"✅ Successfully downloaded: {model_path}")
                     else:
                         download_results[model_path] = "failed"
-                        print(f"❌ Failed to download: {model_path}")
+                        print(f"❌ Failed to download {model_path}: {output}")
                         
                 except Exception as e:
                     download_results[model_path] = f"error: {str(e)}"
