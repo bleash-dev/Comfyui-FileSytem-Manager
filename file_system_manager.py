@@ -3,10 +3,12 @@ import subprocess
 import json
 import tempfile
 import shutil
+import asyncio
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
+from urllib.parse import unquote
 import folder_paths
-from server import PromptServer
+from server import PromptServer as PS
 from aiohttp import web
 
 # Import the new global models manager
@@ -308,7 +310,7 @@ civitai_download_api = CivitAIDownloadAPI()
 # Initialize Direct Upload Handler API
 direct_upload_api = DirectUploadAPI()
 
-@server.PromptServer.instance.routes.get("/filesystem/browse")
+@PS.instance.routes.get("/filesystem/browse")
 async def browse_directory(request):
     """API endpoint for browsing directories"""
     try:
@@ -321,7 +323,7 @@ async def browse_directory(request):
         print(f"Error in /filesystem/browse: {e}")
         return web.json_response({'success': False, 'error': str(e)}, status=500)
 
-@server.PromptServer.instance.routes.post("/filesystem/create_directory")
+@PS.instance.routes.post("/filesystem/create_directory")
 async def create_directory(request):
     """API endpoint for creating directories"""
     try:
@@ -339,7 +341,7 @@ async def create_directory(request):
         print(f"Error in /filesystem/create_directory: {e}")
         return web.json_response({'success': False, 'error': str(e)}, status=500)
 
-@server.PromptServer.instance.routes.delete("/filesystem/delete")
+@PS.instance.routes.delete("/filesystem/delete")
 async def delete_item(request):
     """API endpoint for deleting files and directories"""
     try:
@@ -355,20 +357,20 @@ async def delete_item(request):
         print(f"Error in /filesystem/delete: {e}")
         return web.json_response({'success': False, 'error': str(e)}, status=500)
 
-@server.PromptServer.instance.routes.get("/filesystem/file_info")
+@PS.instance.routes.get("/filesystem/file_info")
 async def get_file_info(request):
     """API endpoint for getting file information"""
     try:
         path = request.query.get('path', '')
         result = file_system_api.get_file_info(path)
-        return server.web.json_response(result)
+        return web.json_response(result)
     except Exception as e:
-        return server.web.json_response(
+        return web.json_response(
             {"success": False, "error": str(e)}, 
             status=500
         )
 
-@server.PromptServer.instance.routes.post("/filesystem/rename_item")
+@PS.instance.routes.post("/filesystem/rename_item")
 async def rename_item_endpoint(request):
     """API endpoint for renaming files and directories"""
     try:
@@ -389,17 +391,17 @@ async def rename_item_endpoint(request):
         return web.json_response({'success': False, 'error': str(e)}, status=500)
         
 
-@server.PromptServer.instance.routes.get("/filesystem/download_file")
+@PS.instance.routes.get("/filesystem/download_file")
 async def download_file_endpoint(request):
     """API endpoint for downloading a single file"""
     return await download_api.download_file(request)
 
-@server.PromptServer.instance.routes.post("/filesystem/download_multiple")
+@PS.instance.routes.post("/filesystem/download_multiple")
 async def download_multiple_files_endpoint(request):
     """API endpoint for downloading multiple files as a zip archive"""
     return await download_api.download_multiple_files(request)
 
-@server.PromptServer.instance.routes.post("/filesystem/upload_from_google_drive")
+@PS.instance.routes.post("/filesystem/upload_from_google_drive")
 async def upload_from_google_drive_endpoint(request):
     """API endpoint for uploading files from Google Drive"""
     try:
@@ -455,20 +457,20 @@ async def upload_from_google_drive_endpoint(request):
         return web.json_response({'success': False, 'error': str(e)}, status=500)
         
 
-@server.PromptServer.instance.routes.get("/filesystem/google_drive_progress/{session_id}")
+@PS.instance.routes.get("/filesystem/google_drive_progress/{session_id}")
 async def get_google_drive_progress_endpoint(request):
     """API endpoint to get Google Drive download progress"""
     try:
         session_id = request.match_info['session_id']
         progress = gdrive_progress_store.get(session_id, {"status": "not_found", "message": "Session not found", "percentage": 0})
-        return server.web.json_response(progress)
+        return web.json_response(progress)
     except Exception as e:
-        return server.web.json_response(
+        return web.json_response(
             {"status": "error", "message": str(e), "percentage": 0},
             status=500
         )
 
-@server.PromptServer.instance.routes.post("/filesystem/download_from_huggingface")
+@PS.instance.routes.post("/filesystem/download_from_huggingface")
 async def download_from_huggingface_endpoint(request):
     """API endpoint for downloading files/repos from Hugging Face"""
     try:
@@ -516,7 +518,7 @@ async def download_from_huggingface_endpoint(request):
             hf_progress_store[session_id] = {"status": "error", "message": str(e), "percentage": 0}
         return web.json_response({'success': False, 'error': str(e)}, status=500)
 
-@server.PromptServer.instance.routes.get("/filesystem/huggingface_progress/{session_id}")
+@PS.instance.routes.get("/filesystem/huggingface_progress/{session_id}")
 async def get_huggingface_progress_endpoint(request):
     """API endpoint to get Hugging Face download progress"""
     try:
@@ -529,7 +531,7 @@ async def get_huggingface_progress_endpoint(request):
             status=500
         )
 
-@server.PromptServer.instance.routes.post("/filesystem/download_from_civitai")
+@PS.instance.routes.post("/filesystem/download_from_civitai")
 async def download_from_civitai_endpoint(request):
     """API endpoint for downloading models from CivitAI"""
     try:
@@ -579,7 +581,7 @@ async def download_from_civitai_endpoint(request):
             civitai_progress_store[session_id] = {"status": "error", "message": str(e), "percentage": 0}
         return web.json_response({'success': False, 'error': str(e)}, status=500)
 
-@server.PromptServer.instance.routes.get("/filesystem/civitai_progress/{session_id}")
+@PS.instance.routes.get("/filesystem/civitai_progress/{session_id}")
 async def get_civitai_progress_endpoint(request):
     """API endpoint to get CivitAI download progress"""
     try:
@@ -595,7 +597,7 @@ async def get_civitai_progress_endpoint(request):
 # Global cancellation tracking
 download_cancellation_flags = {}
 
-@server.PromptServer.instance.routes.post("/filesystem/cancel_download")
+@PS.instance.routes.post("/filesystem/cancel_download")
 async def cancel_download_endpoint(request):
     """API endpoint for cancelling downloads"""
     try:
@@ -643,7 +645,7 @@ async def cancel_download_endpoint(request):
         print(f"Error in /filesystem/cancel_download: {e}")
         return web.json_response({'success': False, 'error': str(e)}, status=500)
 
-@server.PromptServer.instance.routes.post("/filesystem/upload_from_direct_url")
+@PS.instance.routes.post("/filesystem/upload_from_direct_url")
 async def upload_from_direct_url_endpoint(request):
     """API endpoint for uploading files from direct URLs"""
     try:
@@ -691,7 +693,7 @@ async def upload_from_direct_url_endpoint(request):
             direct_upload_progress_store[session_id] = {"status": "error", "message": str(e), "percentage": 0}
         return web.json_response({'success': False, 'error': str(e)}, status=500)
 
-@server.PromptServer.instance.routes.get("/filesystem/direct_upload_progress/{session_id}")
+@PS.instance.routes.get("/filesystem/direct_upload_progress/{session_id}")
 async def get_direct_upload_progress_endpoint(request):
     """API endpoint to get direct upload progress"""
     try:
@@ -706,7 +708,7 @@ async def get_direct_upload_progress_endpoint(request):
 
 # Add new endpoints for global models management
 
-@PromptServer.instance.routes.get("/filesystem/global_models_structure")
+@PS.instance.routes.get("/filesystem/global_models_structure")
 async def get_global_models_structure(request):
     try:
         if not global_models_manager:
@@ -728,7 +730,7 @@ async def get_global_models_structure(request):
             "error": str(e)
         }, status=500)
 
-@PromptServer.instance.routes.post("/filesystem/download_global_model")
+@PS.instance.routes.post("/filesystem/download_global_model")
 async def download_global_model(request):
     try:
         if not global_models_manager:
@@ -765,7 +767,7 @@ async def download_global_model(request):
             "error": str(e)
         }, status=500)
 
-@PromptServer.instance.routes.get("/filesystem/download_progress")
+@PS.instance.routes.get("/filesystem/download_progress")
 async def get_download_progress(request):
     try:
         return web.json_response({
@@ -778,7 +780,7 @@ async def get_download_progress(request):
             "error": str(e)
         }, status=500)
 
-@PromptServer.instance.routes.post("/filesystem/sync_new_model")
+@PS.instance.routes.post("/filesystem/sync_new_model")
 async def sync_new_model(request):
     """Sync a newly downloaded model to global shared storage"""
     try:
@@ -825,7 +827,7 @@ def update_download_progress(model_path, current, total):
     }
 
 # Modify the existing browse endpoint
-@PromptServer.instance.routes.get("/filesystem/browse")
+@PS.instance.routes.get("/filesystem/browse")
 async def browse_filesystem(request):
     try:
         path = request.query.get('path', '')
