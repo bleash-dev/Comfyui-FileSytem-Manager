@@ -2,6 +2,7 @@ import os
 import subprocess
 import json
 import asyncio
+import time
 from pathlib import Path
 import folder_paths
 
@@ -16,10 +17,16 @@ class GlobalModelsManager:
         self.s3_models_base = f"s3://{self.bucket}/pod_sessions/global_shared/models/" if self.bucket else None
         self.aws_configured = self._check_aws_configuration()
         
+        # Add caching
+        self.cache_file = self.comfyui_base / '.global_models_cache.json'
+        self.cache_ttl = 300  # 5 minutes
+        self._structure_cache = None
+        self._cache_timestamp = 0
+        
     def _check_aws_configuration(self):
         """Check if AWS CLI is configured"""
         try:
-            result = subprocess.run(['aws', 's3', 'ls'], 
+            result = subprocess.run(['aws', 's3', 'ls', self.s3_models_base], 
                                   capture_output=True, text=True, timeout=10)
             return result.returncode == 0
         except Exception:
@@ -47,30 +54,6 @@ class GlobalModelsManager:
             print(f"Error getting S3 model size for {s3_path}: {e}")
             return None
 
-    async def _monitor_progress(self, model_path, local_path, total_size):
-        """Monitor download progress of a file."""
-        if not total_size or total_size == 0:
-            return
-
-        store_entry = global_models_progress_store.get(model_path)
-        if not store_entry:
-            return
-
-        while store_entry.get("status") == "downloading":
-            await asyncio.sleep(1)
-            try:
-                if local_path.exists():
-                    current_size = local_path.stat().st_size
-                    progress = (current_size / total_size) * 100
-                    store_entry["progress"] = min(progress, 100)
-                    store_entry["downloaded_size"] = current_size
-                else:
-                    store_entry["progress"] = 0
-                    store_entry["downloaded_size"] = 0
-            except Exception as e:
-                print(f"Error monitoring progress for {model_path}: {e}")
-                break
-
     def _run_aws_command(self, command, timeout=30):
         """Run AWS CLI command with error handling"""
         try:
@@ -84,10 +67,93 @@ class GlobalModelsManager:
         except Exception as e:
             return False, str(e)
 
-    async def get_global_models_structure(self):
-        """Get the structure of available global models from S3"""
+    async def _monitor_progress(self, model_path, local_path, total_size):
+        """Monitor download progress of a file by watching file size changes."""
+        if not total_size or total_size == 0:
+            # If we don't know the total size, we'll estimate based on file growth
+            total_size = 1024 * 1024 * 100  # Assume 100MB as default
+        
+        store_entry = global_models_progress_store.get(model_path)
+        if not store_entry:
+            return
+
+        last_size = 0
+        stalled_count = 0
+        max_stalled_iterations = 30  # 30 seconds of no progress before considering stalled
+        
+        while store_entry.get("status") == "downloading":
+            try:
+                current_size = 0
+                if local_path.exists():
+                    current_size = local_path.stat().st_size
+                
+                # Calculate progress percentage
+                if total_size > 0:
+                    progress = min((current_size / total_size) * 100, 100)
+                else:
+                    # Fallback: estimate progress based on file size growth
+                    progress = min((current_size / (1024 * 1024 * 100)) * 100, 95)  # Cap at 95% for unknown size
+                
+                # Update progress store
+                store_entry["progress"] = progress
+                store_entry["downloaded_size"] = current_size
+                store_entry["total_size"] = total_size
+                
+                # Check if download is stalled
+                if current_size == last_size:
+                    stalled_count += 1
+                    if stalled_count >= max_stalled_iterations:
+                        print(f"Download appears stalled for {model_path}. No progress for {max_stalled_iterations} seconds.")
+                        # Don't break here, let the main download process handle timeouts
+                else:
+                    stalled_count = 0  # Reset stall counter
+                
+                last_size = current_size
+                
+                # If we've reached 100% or the expected file size, we're likely done
+                if progress >= 99.9 or (total_size > 0 and current_size >= total_size):
+                    print(f"Download monitoring complete for {model_path}: {current_size}/{total_size} bytes")
+                    break
+                    
+                # Log progress every 10% for debugging
+                if int(progress) % 10 == 0 and progress > 0:
+                    print(f"Download progress for {model_path}: {progress:.1f}% ({current_size}/{total_size} bytes)")
+                
+            except Exception as e:
+                print(f"Error monitoring progress for {model_path}: {e}")
+                break
+            
+            # Check for cancellation
+            if store_entry.get("status") == "cancelled":
+                print(f"Download monitoring cancelled for {model_path}")
+                break
+                
+            await asyncio.sleep(1)  # Check every second
+
+    async def get_global_models_structure(self, force_refresh=False):
+        """Get the structure of available global models from S3 with caching"""
         if not self.aws_configured or not self.s3_models_base:
+            print("AWS not configured or S3 base path not set.")
             return {}
+        
+        # Check cache first
+        current_time = time.time()
+        if (not force_refresh and 
+            self._structure_cache and 
+            (current_time - self._cache_timestamp) < self.cache_ttl):
+            return self._structure_cache
+        
+        # Try to load from disk cache
+        if not force_refresh and self.cache_file.exists():
+            try:
+                with open(self.cache_file, 'r') as f:
+                    cache_data = json.load(f)
+                    if (current_time - cache_data.get('timestamp', 0)) < self.cache_ttl:
+                        self._structure_cache = cache_data.get('structure', {})
+                        self._cache_timestamp = cache_data.get('timestamp', 0)
+                        return self._structure_cache
+            except Exception as e:
+                print(f"Error loading cache: {e}")
         
         try:
             command = ['aws', 's3', 'ls', self.s3_models_base, '--recursive']
@@ -95,7 +161,7 @@ class GlobalModelsManager:
             
             if not success:
                 print(f"Failed to list S3 models: {output}")
-                return {}
+                return self._structure_cache or {}
             
             structure = {}
             for line in output.strip().split('\n'):
@@ -109,26 +175,58 @@ class GlobalModelsManager:
                         if full_path.startswith('pod_sessions/global_shared/models/'):
                             relative_path = full_path.replace('pod_sessions/global_shared/models/', '')
                             
-                            path_parts = relative_path.split('/')
-                            if len(path_parts) >= 2:
-                                category = path_parts[0]
-                                filename = '/'.join(path_parts[1:])
+                            # Split path into components
+                            path_components = relative_path.split('/')
+                            
+                            # Navigate/create nested structure
+                            current_level = structure
+                            
+                            # Process all path components except the last one (which is the file)
+                            for i, component in enumerate(path_components[:-1]):
+                                if component not in current_level:
+                                    current_level[component] = {}
+                                current_level = current_level[component]
+                            
+                            # Add the file at the final level
+                            if len(path_components) >= 1:
+                                filename = path_components[-1]
+                                # Skip empty filenames and validate
+                                if not filename or not filename.strip() or filename == '':
+                                    print(f"Skipping empty filename in path: {relative_path}")
+                                    continue
                                 
-                                if category not in structure:
-                                    structure[category] = {}
-                                
-                                structure[category][filename] = {
+                                # Skip system files and hidden files that shouldn't be downloadable
+                                if filename.startswith('.') and filename not in ['.gitkeep']:
+                                    print(f"Skipping hidden/system file: {filename}")
+                                    continue
+                                    
+                                current_level[filename] = {
                                     'type': 'file',
                                     'size': size,
                                     's3_path': full_path,
-                                    'local_path': str(self.models_dir / category / filename)
+                                    'local_path': str(self.models_dir / relative_path)
                                 }
+            
+            # Update cache
+            self._structure_cache = structure
+            self._cache_timestamp = current_time
+            
+            # Save to disk cache
+            try:
+                cache_data = {
+                    'structure': structure,
+                    'timestamp': current_time
+                }
+                with open(self.cache_file, 'w') as f:
+                    json.dump(cache_data, f)
+            except Exception as e:
+                print(f"Error saving cache: {e}")
             
             return structure
             
         except Exception as e:
             print(f"Error getting global models structure: {e}")
-            return {}
+            return self._structure_cache or {}
 
     async def download_model(self, model_path):
         """Download a specific model from global storage"""
@@ -150,8 +248,13 @@ class GlobalModelsManager:
             
             local_path.parent.mkdir(parents=True, exist_ok=True)
 
+            # Get file size from S3 for progress tracking
             total_size = self._get_s3_model_size(s3_full_path)
+            if not total_size:
+                print(f"Warning: Could not determine file size for {model_path}, progress may be inaccurate")
+                total_size = 0
             
+            # Initialize progress tracking
             global_models_progress_store[model_path] = {
                 "progress": 0, 
                 "status": "downloading",
@@ -160,28 +263,83 @@ class GlobalModelsManager:
             }
 
             command = ['aws', 's3', 'cp', s3_full_path, str(local_path)]
+            print(f"Starting download: {' '.join(command)}")
 
-            def do_download():
-                return self._run_aws_command(command, timeout=600)
+            # Create a proper async wrapper for the synchronous download
+            async def do_download():
+                loop = asyncio.get_event_loop()
+                try:
+                    return await loop.run_in_executor(None, lambda: self._run_aws_command(command, timeout=600))
+                except Exception as e:
+                    print(f"Download execution error: {e}")
+                    return False, str(e)
 
-            download_task = asyncio.to_thread(do_download)
+            # Start the download task
+            download_task = asyncio.create_task(do_download())
             
+            # Start progress monitoring immediately
             progress_task = asyncio.create_task(self._monitor_progress(model_path, local_path, total_size))
 
-            success, output = await download_task
+            # Monitor both download completion and cancellation
+            while not download_task.done():
+                await asyncio.sleep(0.5)
+                
+                # Check for cancellation
+                current_entry = global_models_progress_store.get(model_path, {})
+                if current_entry.get("status") == "cancelled":
+                    print(f"Cancelling download for {model_path}")
+                    
+                    # Cancel both tasks
+                    download_task.cancel()
+                    progress_task.cancel()
+                    
+                    # Clean up any partially downloaded file
+                    if local_path.exists():
+                        try:
+                            local_path.unlink()
+                            print(f"Removed partially downloaded file after cancellation: {local_path}")
+                        except OSError as e:
+                            print(f"Error removing partial download {local_path}: {e}")
+                    return False
             
-            if global_models_progress_store.get(model_path):
+            # Get download result
+            try:
+                success, output = await download_task
+            except asyncio.CancelledError:
+                print(f"Download task cancelled for {model_path}")
+                return False
+            
+            # Final cancellation check
+            current_entry = global_models_progress_store.get(model_path, {})
+            if current_entry.get("status") == "cancelled":
+                if local_path.exists():
+                    try:
+                        local_path.unlink()
+                        print(f"Removed downloaded file after cancellation: {local_path}")
+                    except OSError as e:
+                        print(f"Error removing download {local_path}: {e}")
+                return False
+            
+            # Update status to finishing and stop progress monitoring
+            if model_path in global_models_progress_store:
                 global_models_progress_store[model_path]["status"] = "finishing"
             
-            await progress_task
+            # Wait for progress monitoring to complete
+            try:
+                await progress_task
+            except asyncio.CancelledError:
+                pass  # Progress task was cancelled, that's fine
 
             if success:
                 print(f"Successfully downloaded {model_path} to {local_path}")
+                
+                # Get final file size
+                final_size = 0
                 if local_path.exists():
                     final_size = local_path.stat().st_size
-                else:
-                    final_size = total_size if total_size else 0
-
+                    print(f"Final file size: {final_size} bytes")
+                
+                # Mark as completed
                 global_models_progress_store[model_path] = {
                     "progress": 100, 
                     "status": "downloaded",
@@ -191,17 +349,32 @@ class GlobalModelsManager:
                 return True
             else:
                 print(f"Failed to download {model_path}: {output}")
-                global_models_progress_store[model_path] = {"progress": 0, "status": "failed", "error": output}
+                global_models_progress_store[model_path] = {
+                    "progress": 0, 
+                    "status": "failed", 
+                    "error": output,
+                    "total_size": total_size,
+                    "downloaded_size": 0
+                }
+                
+                # Clean up failed download
                 if local_path.exists():
                     try:
                         local_path.unlink()
+                        print(f"Removed failed download file: {local_path}")
                     except OSError as e:
                         print(f"Error cleaning up failed download {local_path}: {e}")
                 return False
                 
         except Exception as e:
             print(f"Error downloading model {model_path}: {e}")
-            global_models_progress_store[model_path] = {"progress": 0, "status": "failed", "error": str(e)}
+            global_models_progress_store[model_path] = {
+                "progress": 0, 
+                "status": "failed", 
+                "error": str(e),
+                "total_size": 0,
+                "downloaded_size": 0
+            }
             return False
 
     async def upload_model(self, local_path):

@@ -215,8 +215,21 @@ export class UIComponents {
         tbody.innerHTML = '';
         
         for (const item of contents) {
+            // Skip items with empty or invalid names - be more strict
+            if (!item.name || !item.name.trim() || item.name === '') {
+                console.warn('Skipping item with invalid name:', item);
+                continue;
+            }
+            
+            // Skip items that look like they're from invalid S3 paths
+            if (item.global_exists && !item.local_exists && item.downloadable && !item.s3_path) {
+                console.warn('Skipping global item with missing s3_path:', item);
+                continue;
+            }
+            
             const row = document.createElement('tr');
             row.dataset.path = item.path;
+            row.dataset.globalModelPath = item.global_model_path || '';
             
             // Add special classes for global models
             if (item.global_exists && !item.local_exists) {
@@ -225,13 +238,15 @@ export class UIComponents {
                 row.classList.add('fs-global-model-downloaded');
             }
             
-            // Name column
+            // Name column with improved structure
             const nameCell = document.createElement('td');
             nameCell.innerHTML = `
                 <div class="fs-item">
                     ${this.getItemIcon(item)}
-                    ${this.getItemNameElement(item, onNavigateLinkClick, onGlobalModelDownload)}
-                    ${this.getGlobalModelIndicator(item)}
+                    <div style="flex: 1; min-width: 0; display: flex; align-items: center; justify-content: space-between;">
+                        ${this.getItemNameElement(item, onNavigateLinkClick, onGlobalModelDownload)}
+                        ${this.getGlobalModelIndicator(item)}
+                    </div>
                 </div>
             `;
             
@@ -285,29 +300,46 @@ export class UIComponents {
 
     static getItemNameElement(item, onNavigateLinkClick, onGlobalModelDownload) {
         if (item.type === 'directory') {
-            return `<a href="#" class="fs-item-name-link" data-path="${item.path}">${item.name}</a>`;
-        } else if (item.downloadable && item.global_exists && !item.local_exists && onGlobalModelDownload) {
-            // Global model that can be downloaded
+            return `<a href="#" class="fs-item-name-link" data-path="${item.path}" style="flex: 1;">${item.name}</a>`;
+        } else if (item.global_exists && !item.local_exists && item.downloadable) {
+            // Use global_model_path if available, otherwise construct from path
+            let modelPath = item.global_model_path;
+            if (!modelPath && item.path) {
+                // Extract model path from full path (remove 'models/' prefix)
+                const pathParts = item.path.split('/');
+                if (pathParts[0] === 'models' && pathParts.length > 1) {
+                    modelPath = pathParts.slice(1).join('/');
+                } else {
+                    modelPath = item.path;
+                }
+            }
+            
+            // Ensure we have a valid model path
+            if (!modelPath || modelPath.trim() === '') {
+                console.warn('Invalid model path for global model:', item);
+                return `<span class="fs-item-name" style="flex: 1;">${item.name}</span>`;
+            }
+            
             return `
-                <span class="fs-item-name fs-global-model-name">
-                    ${item.name}
-                    <button class="fs-download-btn" data-model-path="${item.s3_path || item.path}">
+                <div class="fs-global-model-name" style="flex: 1;">
+                    <span class="fs-item-name">${item.name}</span>
+                    <button class="fs-download-btn" data-model-path="${modelPath}" data-full-path="${item.path}" title="Download ${item.name} from global storage">
                         📥 Download
                     </button>
-                </span>
+                </div>
             `;
         } else {
-            return `<span class="fs-item-name">${item.name}</span>`;
+            return `<span class="fs-item-name" style="flex: 1;">${item.name}</span>`;
         }
     }
 
     static getGlobalModelIndicator(item) {
-        if (item.downloadable && item.global_exists && !item.local_exists) {
-            return '<span class="fs-global-indicator" title="Available in global storage">🌐</span>';
-        } else if (item.downloadable && item.global_exists && item.local_exists) {
-            return '<span class="fs-global-indicator" title="Downloaded from global storage">✅</span>';
-        } else if (item.global_exists && !item.downloadable) {
-            return '<span class="fs-global-indicator" title="Global category available">🌐</span>';
+        if (item.global_exists && !item.local_exists && item.downloadable) {
+            return '<span class="fs-global-indicator">🌐 Global</span>';
+        } else if (item.global_exists && item.local_exists) {
+            return '<span class="fs-global-indicator">✅ Synced</span>';
+        } else if (item.global_exists && !item.local_exists && item.type === 'directory') {
+            return '<span class="fs-global-indicator">🌐 Browse</span>';
         }
         return '';
     }
@@ -315,16 +347,146 @@ export class UIComponents {
     static getItemIcon(item) {
         if (item.type === 'directory') {
             if (item.global_exists && !item.local_exists) {
-                return '<span class="fs-item-icon">🌐</span>'; // Global directory
+                return '<p><span class="fs-item-icon">🌐📁</span></p>';
+            } else if (item.global_exists && item.local_exists) {
+                return '<p><span class="fs-item-icon">📁✅</span></p>';
             }
-            return '<span class="fs-item-icon">📁</span>';
+            return '<p><span class="fs-item-icon">📁</span></p>';
         } else {
+            if (item.global_exists && !item.local_exists) {
+                return '<p><span class="fs-item-icon">📄🌐</span></p>';
+            }
             const extension = item.name.split('.').pop().toLowerCase();
             if (['safetensors', 'ckpt', 'pt', 'pth', 'bin'].includes(extension)) {
-                return '<span class="fs-item-icon">🤖</span>'; // AI model file
+                return '<span class="fs-item-icon">🤖</span>';
             }
             return '<span class="fs-item-icon">📄</span>';
         }
+    }
+
+    static showGlobalModelProgress(modal, modelPath, progress) {
+        const downloadBtn = modal.querySelector(`[data-model-path="${modelPath}"]`);
+        if (!downloadBtn) return;
+        
+        const container = downloadBtn.closest('tr');
+        if (!container) return;
+        
+        let progressContainer = container.querySelector('.fs-global-progress');
+        if (!progressContainer) {
+            progressContainer = document.createElement('div');
+            progressContainer.className = 'fs-global-progress';
+            progressContainer.innerHTML = `
+                <div class="fs-global-progress-bar">
+                    <div class="fs-global-progress-fill" style="width: 0%"></div>
+                </div>
+                <div class="fs-global-progress-text">Starting...</div>
+                <button class="fs-global-cancel-btn" title="Cancel Download">×</button>
+            `;
+            
+            const nameCell = downloadBtn.closest('.fs-item');
+            nameCell.appendChild(progressContainer);
+            downloadBtn.style.display = 'none';
+        }
+        
+        const progressFill = progressContainer.querySelector('.fs-global-progress-fill');
+        const progressText = progressContainer.querySelector('.fs-global-progress-text');
+        const cancelBtn = progressContainer.querySelector('.fs-global-cancel-btn');
+        
+        // Update progress bar
+        if (progressFill) {
+            const percentage = Math.round(progress.progress || 0);
+            progressFill.style.width = `${percentage}%`;
+        }
+        
+        // Update progress text based on status
+        if (progressText) {
+            if (progress.status === 'downloading') {
+                const downloaded = this.formatFileSize(progress.downloaded_size || 0);
+                const total = progress.total_size ? this.formatFileSize(progress.total_size) : 'Unknown';
+                const percentage = Math.round(progress.progress || 0);
+                
+                if (progress.total_size && progress.total_size > 0) {
+                    progressText.textContent = `${downloaded} / ${total} (${percentage}%)`;
+                } else {
+                    progressText.textContent = `${downloaded} downloaded (${percentage}%)`;
+                }
+            } else if (progress.status === 'finishing') {
+                progressText.textContent = 'Finishing download...';
+            } else if (progress.status === 'failed') {
+                progressText.textContent = `Failed: ${progress.error || 'Unknown error'}`;
+                progressText.style.color = '#dc3545';
+            } else if (progress.status === 'cancelled') {
+                progressText.textContent = 'Download cancelled';
+                progressText.style.color = '#ffc107';
+            } else {
+                progressText.textContent = progress.status || 'Processing...';
+            }
+        }
+        
+        // Handle cancel button
+        if (cancelBtn && !cancelBtn.hasAttribute('data-listener-attached')) {
+            cancelBtn.setAttribute('data-listener-attached', 'true');
+            cancelBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const cancelEvent = new CustomEvent('globalModelCancel', {
+                    detail: { modelPath: modelPath }
+                });
+                modal.dispatchEvent(cancelEvent);
+            });
+        }
+        
+        // Handle completion
+        if (progress.status === 'downloaded') {
+            progressText.textContent = 'Download complete!';
+            progressText.style.color = '#28a745';
+            cancelBtn.style.display = 'none';
+            
+            setTimeout(() => {
+                progressContainer.remove();
+                downloadBtn.style.display = 'inline-block';
+                
+                // Trigger refresh event
+                const refreshEvent = new CustomEvent('globalModelDownloaded', {
+                    detail: { modelPath: modelPath }
+                });
+                modal.dispatchEvent(refreshEvent);
+            }, 2000);
+        } else if (progress.status === 'failed' || progress.status === 'cancelled') {
+            cancelBtn.style.display = 'none';
+            
+            // Add retry button for failed downloads
+            if (progress.status === 'failed') {
+                let retryBtn = progressContainer.querySelector('.fs-global-retry-btn');
+                if (!retryBtn) {
+                    retryBtn = document.createElement('button');
+                    retryBtn.className = 'fs-global-retry-btn';
+                    retryBtn.textContent = '🔄';
+                    retryBtn.title = 'Retry Download';
+                    retryBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        progressContainer.remove();
+                        downloadBtn.style.display = 'inline-block';
+                        downloadBtn.click();
+                    });
+                    progressContainer.appendChild(retryBtn);
+                }
+            }
+        }
+    }
+
+    static hideGlobalModelProgress(modal, modelPath) {
+        const downloadBtn = modal.querySelector(`[data-model-path="${modelPath}"]`);
+        if (!downloadBtn) return;
+        
+        const container = downloadBtn.closest('tr');
+        if (!container) return;
+        
+        const progressContainer = container.querySelector('.fs-global-progress');
+        if (progressContainer) {
+            progressContainer.remove();
+        }
+        
+        downloadBtn.style.display = 'inline-block';
     }
 
     static updateActions(modal, hasSelectedItems) {

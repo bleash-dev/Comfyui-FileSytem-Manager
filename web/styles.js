@@ -144,17 +144,45 @@ style.textContent = `
     background-color: rgba(255, 255, 255, 0.05);
 }
 
+/* Prevent hover effect on global model rows that might look like selection */
+.fs-global-model-available:hover {
+    background-color: rgba(0, 123, 255, 0.08) !important;
+}
+
+.fs-global-model-downloaded:hover {
+    background-color: rgba(40, 167, 69, 0.08) !important;
+}
+
 .fs-item {
     cursor: pointer;
     display: flex;
     align-items: center;
     gap: 8px;
+    min-height: 32px; /* Ensure consistent row height */
+    width: 100%; /* Full width to properly distribute space */
+}
+
+.fs-item > div:first-of-type {
+    flex: 1; /* Name element takes available space */
+    min-width: 0; /* Allow text truncation */
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Fix selection styling to be more distinct */
+.fs-item-selected {
+    background-color: rgba(0, 123, 255, 0.25) !important;
+    border-left: 3px solid #007bff !important;
+}
+
+.fs-item-selected:hover {
+    background-color: rgba(0, 123, 255, 0.3) !important;
 }
 
 .fs-item-icon {
     width: 16px;
     height: 16px;
-    flex-shrink: 0;
 }
 
 .fs-item-name-link {
@@ -823,67 +851,149 @@ style.textContent = `
     justify-content: center;
 }
 
-/* Global model specific styles */
+/* Global model specific styles - improved */
 .fs-global-model-available {
-    background-color: rgba(0, 123, 255, 0.05);
-    border-left: 3px solid #007bff;
+    background-color: rgba(0, 123, 255, 0.03) !important;
+    border-left: 2px solid #007bff;
+    position: relative;
 }
 
 .fs-global-model-downloaded {
-    background-color: rgba(40, 167, 69, 0.05);
-    border-left: 3px solid #28a745;
+    background-color: rgba(40, 167, 69, 0.03) !important;
+    border-left: 2px solid #28a745;
+    position: relative;
 }
 
 .fs-global-model-downloading {
     background-color: rgba(255, 193, 7, 0.05);
-    border-left: 3px solid #ffc107;
+    border-left: 2px solid #ffc107;
     animation: downloading 2s linear infinite;
 }
 
+/* Add a subtle indicator for global availability */
+
+
 .fs-global-indicator {
-    margin-left: 8px;
-    font-size: 12px;
-    opacity: 0.8;
+    margin-left: auto; /* Push to the right */
+    font-size: 11px; /* Slightly smaller */
+    opacity: 0.9;
+    flex-shrink: 0;
+    padding: 2px 6px; /* Increased horizontal padding */
+    border-radius: 3px;
+    background-color: rgba(255, 255, 255, 0.1);
+    white-space: nowrap; /* Prevent text wrapping */
+    font-weight: 500; /* Slightly bolder */
+}
+
+.fs-global-model-name {
+    display: flex;
+    align-items: center;
+    gap: 12px; /* Increased gap for better spacing */
+    flex: 1;
+    min-width: 0;
+    padding: 2px 0; /* Add vertical padding */
+}
+
+.fs-global-model-name .fs-item-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500; /* Slightly bolder for better readability */
 }
 
 .fs-download-btn {
-    margin-left: 8px;
-    padding: 2px 6px;
-    font-size: 10px;
-    background-color: #007bff;
+    background: linear-gradient(135deg, #007bff, #0056b3);
     color: white;
     border: none;
-    border-radius: 3px;
+    padding: 4px 10px; /* Reduced vertical padding, increased horizontal */
+    border-radius: 4px; /* Slightly less rounded */
+    font-size: 10px; /* Smaller font */
     cursor: pointer;
-    transition: background-color 0.2s ease;
+    transition: all 0.2s ease;
+    font-weight: 600; /* Bolder text */
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px; /* Reduced gap */
+    flex-shrink: 0;
+    box-shadow: 0 1px 3px rgba(0, 123, 255, 0.2); /* Subtle shadow */
+    line-height: 1; /* Tighter line height */
 }
 
 .fs-download-btn:hover {
-    background-color: #0056b3;
+    background: linear-gradient(135deg, #0056b3, #004494);
+    transform: translateY(-1px);
+    box-shadow: 0 3px 8px rgba(0, 123, 255, 0.3);
 }
 
-.fs-download-progress {
-    margin-top: 4px;
+.fs-download-btn:active {
+    transform: translateY(0);
+    box-shadow: 0 1px 3px rgba(0, 123, 255, 0.3);
+}
+
+.fs-global-progress {
+    margin-top: 6px;
+    padding: 8px;
+    background-color: rgba(0, 123, 255, 0.1);
+    border-radius: 4px;
+    border: 1px solid rgba(0, 123, 255, 0.3);
+    position: relative;
+    font-size: 11px;
+}
+
+.fs-global-progress-bar {
     width: 100%;
     height: 4px;
     background-color: rgba(255, 255, 255, 0.2);
     border-radius: 2px;
     overflow: hidden;
-    position: relative;
+    margin-bottom: 4px;
 }
 
-.fs-download-progress-bar {
+.fs-global-progress-fill {
     height: 100%;
-    background-color: #007bff;
+    background: linear-gradient(90deg, #007bff, #0056b3);
     transition: width 0.3s ease;
+    border-radius: 2px;
 }
 
-.fs-download-progress-text {
-    position: absolute;
-    right: 4px;
-    top: -16px;
-    font-size: 10px;
+.fs-global-progress-text {
     color: var(--input-text);
+    font-weight: 500;
+}
+
+.fs-global-cancel-btn, .fs-global-retry-btn {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    background: #dc3545;
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 18px;
+    height: 18px;
+    font-size: 10px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+}
+
+.fs-global-retry-btn {
+    background: #007bff;
+}
+
+.fs-global-cancel-btn:hover {
+    background: #c82333;
+    transform: scale(1.1);
+}
+
+.fs-global-retry-btn:hover {
+    background: #0056b3;
+    transform: scale(1.1);
 }
 
 @keyframes downloading {

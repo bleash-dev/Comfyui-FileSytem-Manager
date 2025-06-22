@@ -28,6 +28,9 @@ export class FileSystemManager {
         this.setupMissingModelsHandler();
         this.startGlobalModelsMonitoring();
         this.startWorkflowMonitoring();
+
+        this.progressPollingInterval = null;
+        this.activeDownloads = new Set();
     }
 
     createModal() {
@@ -70,6 +73,14 @@ export class FileSystemManager {
                 this.closeModal();
             }
         });
+
+         modal.addEventListener('globalModelCancel', (e) => {
+            this.cancelGlobalModelDownload(e.detail.modelPath);
+        });
+        
+        modal.addEventListener('globalModelDownloaded', (e) => {
+            this.refreshCurrentDirectory();
+        });
     }
 
     showUploadModal() {
@@ -82,76 +93,6 @@ export class FileSystemManager {
         document.body.appendChild(this.uploadModal);
         
         UIComponents.showUploadOptions(this.uploadModal);
-    }
-
-    closeUploadModal() {
-        if (this.uploadModal) {
-            document.body.removeChild(this.uploadModal);
-            this.uploadModal = null;
-        }
-        this.stopUploadProgressPolling();
-    }
-
-    setUploadButtonState(enabled) {
-        if (this.uploadModal) {
-            const uploadButton = this.uploadModal.querySelector('#fs-upload-start');
-            if (uploadButton) {
-                uploadButton.disabled = !enabled;
-            }
-        }
-    }
-
-    handleUploadFormInputChange() {
-        this.setUploadButtonState(true);
-    }
-
-    setupUploadEventListeners(modal) {
-        // Close upload modal
-        modal.querySelector('#fs-upload-close').addEventListener('click', () => this.closeUploadModal());
-        
-        // Upload option selection
-        modal.querySelectorAll('.fs-upload-option').forEach(option => {
-            option.addEventListener('click', () => {
-                const type = option.dataset.type;
-                this.currentUploadType = type; // Ensure currentUploadType is set
-                let destinationPathText = this.currentPath || "FSM Root"; // Default to current browsed path
-
-                if (this.selectedItems.size === 1) {
-                    const selectedPath = Array.from(this.selectedItems)[0];
-                    const selectedItem = this.currentContents.find(item => item.path === selectedPath);
-                    if (selectedItem && selectedItem.type === 'directory') {
-                        destinationPathText = selectedItem.path; // Target the selected directory
-                    }
-                }
-                // Store this for startUpload
-                this.currentUploadDestinationPath = destinationPathText === "FSM Root" ? "" : destinationPathText;
-
-
-                UIComponents.showUploadForm(modal, type, destinationPathText);
-                this.setUploadButtonState(true); // Enable button when form is shown
-                this.attachUploadFormInputListeners(modal);
-            });
-        });
-        
-        // Back button
-        modal.querySelector('#fs-upload-back').addEventListener('click', () => {
-            UIComponents.showUploadOptions(modal);
-            // No need to change button state here, as options view doesn't have it
-        });
-        
-        // Upload actions
-        modal.querySelector('#fs-upload-start').addEventListener('click', () => this.startUpload());
-        modal.querySelector('#fs-upload-cancel').addEventListener('click', () => this.closeUploadModal());
-        
-        // Listen for cancel events from progress bar
-        modal.addEventListener('uploadCancel', () => this.cancelUpload());
-        
-        // Close on backdrop click
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) {
-                this.closeUploadModal();
-            }
-        });
     }
 
     closeUploadModal() {
@@ -1545,32 +1486,90 @@ export class FileSystemManager {
     }
 
     async handleGlobalModelDownload(item) {
-        // Check if the item is a global model and needs downloading
-        if (item.type === 'file' && item.path.startsWith('global/')) {
-            const progress = this.downloadProgress[item.path];
-            if (progress && progress.status === 'downloading') {
-                // Already downloading, just return
+        // Check for correct item properties
+        if (item.global_exists && !item.local_exists && item.downloadable) {
+            const modelPath = item.global_model_path || item.path;
+            
+            // Check if already downloading
+            if (this.downloadProgress[modelPath] && 
+                this.downloadProgress[modelPath].status === 'downloading') {
+                // Already downloading
+                UIComponents.showMessage(this.modal, `Already downloading ${modelPath}`, false);
                 return;
             }
             
-            // Start download
             try {
+                UIComponents.showMessage(this.modal, `Starting download for ${modelPath}...`, false);
+                  // Show initial progress UI
+                    UIComponents.showGlobalModelProgress(this.modal, modelPath, {
+                        status: 'downloading',
+                        progress: 0,
+                        downloaded_size: 0,
+                        total_size: item.size || 0
+                    });
+                // Call the API to start the download
                 const response = await api.fetchApi('/filesystem/download_global_model', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ path: item.path })
+                    body: JSON.stringify({ model_path: modelPath })
                 });
                 
                 const result = await response.json();
+                
                 if (result.success) {
-                    UIComponents.showMessage(this.modal, `Started downloading global model: ${item.path}`, false);
-                    this.startGlobalModelDownloadProgress(item.path);
+                    // Show initial progress UI
+                    UIComponents.showGlobalModelProgress(this.modal, modelPath, {
+                        status: 'downloading',
+                        progress: 0,
+                        downloaded_size: 0,
+                        total_size: item.size || 0
+                    });
                 } else {
-                    UIComponents.showMessage(this.modal, `Error starting download: ${result.error}`, true);
+                    UIComponents.showMessage(this.modal, `Error: ${result.error || 'Failed to start download'}`, true);
                 }
             } catch (error) {
-                UIComponents.showMessage(this.modal, `Error starting download: ${error.message}`, true);
+                UIComponents.showMessage(this.modal, `Error: ${error.message}`, true);
             }
+        }
+    }
+
+    async cancelGlobalModelDownload(modelPath) {
+        try {
+            const response = await api.fetchApi('/filesystem/cancel_global_model_download', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model_path: modelPath })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                UIComponents.showMessage(this.modal, `Cancelled download for ${modelPath}`, false);
+                UIComponents.hideGlobalModelProgress(this.modal, modelPath);
+            } else {
+                UIComponents.showMessage(this.modal, `Error: ${result.error || 'Failed to cancel download'}`, true);
+            }
+        } catch (error) {
+            UIComponents.showMessage(this.modal, `Error: ${error.message}`, true);
+        }
+    }
+
+    async updateGlobalModelDownloadProgress() {
+        try {
+            const response = await api.fetchApi('/filesystem/global_model_download_progress');
+            const result = await response.json();
+            
+            if (result.success) {
+                // Store the progress data
+                this.downloadProgress = result.progress;
+                
+                // Update UI for each model in progress
+                Object.entries(result.progress).forEach(([modelPath, progressData]) => {
+                    UIComponents.showGlobalModelProgress(this.modal, modelPath, progressData);
+                });
+            }
+        } catch (error) {
+            console.error('Error updating global model download progress:', error);
         }
     }
 
