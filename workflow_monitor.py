@@ -248,6 +248,7 @@ class WorkflowMonitor:
             for model_path in missing_models:
                 parts = model_path.split('/', 1)
                 if len(parts) != 2:
+                    available[model_path] = {'available': False}
                     continue
                     
                 category, model_name = parts
@@ -255,13 +256,16 @@ class WorkflowMonitor:
                 if category in global_structure:
                     if model_name in global_structure[category]:
                         model_info = global_structure[category][model_name]
-                        available[model_path] = {
-                            'available': True,
-                            'type': model_info.get('type', 'file'),
-                            'size': model_info.get('size', 0),
-                            's3_path': model_info.get('s3_path', model_path),
-                            'local_path': str(self.models_dir / model_path)
-                        }
+                        if isinstance(model_info, dict) and model_info.get('type') == 'file':
+                            available[model_path] = {
+                                'available': True,
+                                'type': model_info.get('type', 'file'),
+                                'size': model_info.get('size', 0),
+                                's3_path': model_info.get('s3_path', ''),
+                                'local_path': str(self.models_dir / model_path)
+                            }
+                        else:
+                            available[model_path] = {'available': False}
                     else:
                         available[model_path] = {'available': False}
                 else:
@@ -273,17 +277,12 @@ class WorkflowMonitor:
         return available
     
     async def auto_download_missing_models(self, missing_models: Set[str]) -> Dict[str, str]:
-        """Download only missing models that are available globally using AWS CLI"""
+        """Download only missing models that are available globally"""
         if not global_models_manager or not self.auto_download_enabled or not self.aws_configured:
             return {}
             
         download_results = {}
         available_models = await self.get_available_global_models(missing_models)
-        
-        bucket = os.environ.get('AWS_BUCKET_NAME')
-        if not bucket:
-            print("AWS_BUCKET_NAME not set, cannot download models")
-            return {}
         
         for model_path, model_info in available_models.items():
             if model_info.get('available', False):
@@ -297,27 +296,15 @@ class WorkflowMonitor:
                 try:
                     print(f"🔄 Auto-downloading missing model: {model_path}")
                     
-                    # Create local directory if it doesn't exist
-                    local_path.parent.mkdir(parents=True, exist_ok=True)
+                    # Use the existing global models manager download method
+                    success = await global_models_manager.download_model(model_path)
                     
-                    # Use global_models_manager to download with progress
-                    s3_path = model_info.get('s3_path')
-                    if not s3_path:
-                        download_results[model_path] = "failed: no s3_path"
-                        print(f"❌ Failed to download {model_path}: No S3 path provided")
-                        continue
-
-                    try:
-                        await global_models_manager.download_model(
-                            s3_path=s3_path,
-                            local_path=str(local_path),
-                            model_id=model_path # Use model_path as a unique ID for progress tracking
-                        )
+                    if success:
                         download_results[model_path] = "downloaded"
                         print(f"✅ Successfully downloaded: {model_path}")
-                    except Exception as download_e:
-                        download_results[model_path] = f"failed: {str(download_e)}"
-                        print(f"❌ Failed to download {model_path}: {download_e}")
+                    else:
+                        download_results[model_path] = "failed: download unsuccessful"
+                        print(f"❌ Failed to download {model_path}")
                         
                 except Exception as e:
                     download_results[model_path] = f"error: {str(e)}"

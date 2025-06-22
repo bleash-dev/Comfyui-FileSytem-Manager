@@ -33,6 +33,14 @@ from .civitai_handler import CivitAIDownloadAPI, civitai_progress_store
 # Import Direct Upload Handler
 from .direct_upload_handler import DirectUploadAPI, direct_upload_progress_store, direct_upload_cancellation_flags
 
+# Import workflow monitor to register its endpoints
+try:
+    from .workflow_monitor import workflow_monitor
+    print("Workflow monitor endpoints registered")
+except ImportError:
+    print("Workflow monitor not available")
+    workflow_monitor = None
+
 
 class FileSystemManagerAPI:
     def __init__(self):
