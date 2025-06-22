@@ -10,6 +10,9 @@ import folder_paths
 # Global progress tracking for direct uploads
 direct_upload_progress_store = {}
 
+# Global cancellation tracking - defined here to avoid circular imports
+direct_upload_cancellation_flags = {}
+
 class DirectUploadProgressTracker:
     @staticmethod
     def update_progress(session_id: str, message: str, percentage: int, status: str = "progress"):
@@ -137,14 +140,11 @@ class DirectUploadDownloader:
     async def download_with_progress(self, url: str, target_path: str, filename: str, 
                                    session_id: str = None, progress_callback=None):
         """Download file with real-time progress tracking"""
-        # Import cancellation flags
-        from .file_system_manager import download_cancellation_flags
-        
         timeout = aiohttp.ClientTimeout(total=3600, connect=30)  # 1 hour total, 30s connect
         
         async with aiohttp.ClientSession(timeout=timeout) as session:
             # Check for cancellation before starting request
-            if session_id and download_cancellation_flags.get(session_id):
+            if session_id and direct_upload_cancellation_flags.get(session_id):
                 raise asyncio.CancelledError("Download cancelled by user")
                 
             async with session.get(url) as response:
@@ -169,7 +169,7 @@ class DirectUploadDownloader:
                     
                     async for chunk in response.content.iter_chunked(chunk_size):
                         # Check for cancellation on each chunk
-                        if session_id and download_cancellation_flags.get(session_id):
+                        if session_id and direct_upload_cancellation_flags.get(session_id):
                             # Clean up partial file
                             try:
                                 await file.close()
@@ -202,12 +202,9 @@ class DirectUploadDownloader:
                                      filename: str = None, overwrite: bool = False,
                                      session_id: str = None):
         """Download a file from a direct URL with progress tracking"""
-        # Import cancellation flags
-        from .file_system_manager import download_cancellation_flags
-        
         try:
             # Check for cancellation at the start
-            if session_id and download_cancellation_flags.get(session_id):
+            if session_id and direct_upload_cancellation_flags.get(session_id):
                 DirectUploadProgressTracker.set_cancelled(session_id, "Download cancelled by user")
                 return {"success": False, "error": "Download cancelled by user"}
                 
@@ -219,7 +216,7 @@ class DirectUploadDownloader:
                 raise ValueError("Invalid URL provided")
             
             # Check for cancellation
-            if session_id and download_cancellation_flags.get(session_id):
+            if session_id and direct_upload_cancellation_flags.get(session_id):
                 DirectUploadProgressTracker.set_cancelled(session_id, "Download cancelled by user")
                 return {"success": False, "error": "Download cancelled by user"}
             
@@ -235,7 +232,7 @@ class DirectUploadDownloader:
             final_path = target_dir / filename
             
             # Check for cancellation before file operations
-            if session_id and download_cancellation_flags.get(session_id):
+            if session_id and direct_upload_cancellation_flags.get(session_id):
                 DirectUploadProgressTracker.set_cancelled(session_id, "Download cancelled by user")
                 return {"success": False, "error": "Download cancelled by user"}
             
@@ -270,7 +267,7 @@ class DirectUploadDownloader:
                 )
                 
                 # Check for cancellation after download
-                if session_id and download_cancellation_flags.get(session_id):
+                if session_id and direct_upload_cancellation_flags.get(session_id):
                     # Clean up temp file
                     self.utils.cleanup_temp_file(temp_path)
                     DirectUploadProgressTracker.set_cancelled(session_id, "Download cancelled by user")
@@ -322,8 +319,8 @@ class DirectUploadDownloader:
             }
         finally:
             # Clean up cancellation flag
-            if session_id and session_id in download_cancellation_flags:
-                del download_cancellation_flags[session_id]
+            if session_id and session_id in direct_upload_cancellation_flags:
+                del direct_upload_cancellation_flags[session_id]
 
 class DirectUploadAPI:
     def __init__(self):

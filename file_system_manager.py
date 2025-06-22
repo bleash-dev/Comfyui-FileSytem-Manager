@@ -13,7 +13,7 @@ from aiohttp import web
 
 # Import the new global models manager
 try:
-    from .global_models_manager import GlobalModelsManager
+    from .global_models_manager import GlobalModelsManager, global_models_progress_store
     global_models_manager = GlobalModelsManager()
 except ImportError:
     print("Global models manager not available")
@@ -31,12 +31,14 @@ from .huggingface_handler import HuggingFaceDownloadAPI, hf_progress_store
 from .civitai_handler import CivitAIDownloadAPI, civitai_progress_store
 
 # Import Direct Upload Handler
-from .direct_upload_handler import DirectUploadAPI, direct_upload_progress_store
+from .direct_upload_handler import DirectUploadAPI, direct_upload_progress_store, direct_upload_cancellation_flags
 
 
 class FileSystemManagerAPI:
     def __init__(self):
+        """Initialize the file system manager with allowed directories."""
         self.comfyui_base = Path(folder_paths.base_path)
+        
         # Define allowed directories for security
         self.allowed_directories = {
             'models': self.comfyui_base / 'models',
@@ -181,9 +183,9 @@ class FileSystemManagerAPI:
             return {"success": True, "contents": contents}
             
         except Exception as e:
-            print(f"Error in get_directory_contents: {e}")
+            print(f"Error in get_directory_contents for path '{relative_path}': {e}")
             return {"success": False, "error": str(e)}
-    
+
     def create_directory(self, relative_path: str, directory_name: str) -> Dict[str, Any]:
         """Create a new directory"""
         try:
@@ -223,7 +225,7 @@ class FileSystemManagerAPI:
         except Exception as e:
             print(f"Error creating directory: {e}")
             return {"success": False, "error": str(e)}
-    
+
     def delete_item(self, relative_path: str) -> Dict[str, Any]:
         """Delete a file or directory"""
         try:
@@ -608,34 +610,40 @@ async def cancel_download_endpoint(request):
         if not session_id:
             return web.json_response({'success': False, 'error': 'Session ID not provided'}, status=400)
         
-        # Set cancellation flag
-        download_cancellation_flags[session_id] = True
-        
-        # Update progress stores to indicate cancellation
+        # Set cancellation flag based on download type
         if download_type == 'google-drive':
+            download_cancellation_flags[session_id] = True
             gdrive_progress_store[session_id] = {
                 "status": "cancelled",
                 "message": "Download cancelled by user",
                 "percentage": 0
             }
         elif download_type == 'huggingface':
+            download_cancellation_flags[session_id] = True
             hf_progress_store[session_id] = {
                 "status": "cancelled", 
                 "message": "Download cancelled by user",
                 "percentage": 0
             }
         elif download_type == 'civitai':
+            download_cancellation_flags[session_id] = True
             civitai_progress_store[session_id] = {
                 "status": "cancelled",
                 "message": "Download cancelled by user", 
                 "percentage": 0
             }
         elif download_type == 'direct-link':
+            # Use the direct upload specific cancellation flags
+            direct_upload_cancellation_flags[session_id] = True
             direct_upload_progress_store[session_id] = {
                 "status": "cancelled",
                 "message": "Download cancelled by user",
                 "percentage": 0
             }
+        else:
+            # Fallback - set flags in all stores
+            download_cancellation_flags[session_id] = True
+            direct_upload_cancellation_flags[session_id] = True
         
         print(f"🚫 Download cancellation requested for session: {session_id} (type: {download_type})")
         
@@ -780,6 +788,26 @@ async def get_download_progress(request):
             "error": str(e)
         }, status=500)
 
+@PS.instance.routes.get("/filesystem/global_model_download_progress")
+async def get_global_model_download_progress(request):
+    """Get the current progress of global model downloads"""
+    try:
+        if not global_models_manager:
+            return web.json_response({
+                "success": False,
+                "error": "Global models manager not available"
+            }, status=500)
+        
+        return web.json_response({
+            "success": True,
+            "progress": global_models_progress_store
+        })
+    except Exception as e:
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
 @PS.instance.routes.post("/filesystem/sync_new_model")
 async def sync_new_model(request):
     """Sync a newly downloaded model to global shared storage"""
@@ -825,53 +853,3 @@ def update_download_progress(model_path, current, total):
         "percentage": percentage,
         "status": "downloading" if percentage < 100 else "completed"
     }
-
-# Modify the existing browse endpoint
-@PS.instance.routes.get("/filesystem/browse")
-async def browse_filesystem(request):
-    try:
-        path = request.query.get('path', '')
-        print(f"Browse request for path: '{path}'")
-        
-        base_path = Path(folder_paths.base_path)
-        current_path = base_path / path if path else base_path
-        
-        # Check if we're browsing the models directory or its subdirectories
-        is_models_path = path == 'models' or (path.startswith('models/') and path.count('/') == 1)
-        
-        if is_models_path and global_models_manager:
-            # Use global models manager for enhanced model browsing
-            category_path = path[7:] if path.startswith('models/') else ""  # Remove 'models/' prefix
-            contents = global_models_manager.get_enhanced_directory_contents(category_path)
-        else:
-            # Regular directory browsing for non-models paths
-            contents = []
-            if current_path.exists() and current_path.is_dir():
-                for item in current_path.iterdir():
-                    if item.name.startswith('.'):
-                        continue
-                    
-                    relative_path = str(item.relative_to(base_path))
-                    contents.append({
-                        "name": item.name,
-                        "path": relative_path,
-                        "type": "directory" if item.is_dir() else "file",
-                        "size": item.stat().st_size if item.is_file() else 0,
-                        "modified": item.stat().st_mtime,
-                        "local_exists": True,
-                        "global_exists": False,
-                        "downloadable": False
-                    })
-        
-        return web.json_response({
-            "success": True,
-            "path": path,
-            "contents": contents
-        })
-        
-    except Exception as e:
-        print(f"Error browsing path '{path}': {e}")
-        return web.json_response({
-            "success": False,
-            "error": str(e)
-        }, status=500)

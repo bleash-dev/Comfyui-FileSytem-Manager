@@ -5,6 +5,9 @@ import asyncio
 from pathlib import Path
 import folder_paths
 
+# Progress tracking for global model downloads
+global_models_progress_store = {}
+
 class GlobalModelsManager:
     def __init__(self):
         self.comfyui_base = Path(folder_paths.base_path)
@@ -21,6 +24,52 @@ class GlobalModelsManager:
             return result.returncode == 0
         except Exception:
             return False
+
+    def _get_s3_model_size(self, s3_path):
+        """Get model size from S3 using aws s3api head-object"""
+        if not self.aws_configured:
+            return None
+        try:
+            if not s3_path.startswith("s3://"):
+                return None
+            parts = s3_path.replace("s3://", "").split('/', 1)
+            if len(parts) < 2:
+                return None
+            bucket = parts[0]
+            key = parts[1]
+            command = ['aws', 's3api', 'head-object', '--bucket', bucket, '--key', key]
+            success, output = self._run_aws_command(command)
+            if success:
+                data = json.loads(output)
+                return data.get('ContentLength')
+            return None
+        except Exception as e:
+            print(f"Error getting S3 model size for {s3_path}: {e}")
+            return None
+
+    async def _monitor_progress(self, model_path, local_path, total_size):
+        """Monitor download progress of a file."""
+        if not total_size or total_size == 0:
+            return
+
+        store_entry = global_models_progress_store.get(model_path)
+        if not store_entry:
+            return
+
+        while store_entry.get("status") == "downloading":
+            await asyncio.sleep(1)
+            try:
+                if local_path.exists():
+                    current_size = local_path.stat().st_size
+                    progress = (current_size / total_size) * 100
+                    store_entry["progress"] = min(progress, 100)
+                    store_entry["downloaded_size"] = current_size
+                else:
+                    store_entry["progress"] = 0
+                    store_entry["downloaded_size"] = 0
+            except Exception as e:
+                print(f"Error monitoring progress for {model_path}: {e}")
+                break
 
     def _run_aws_command(self, command, timeout=30):
         """Run AWS CLI command with error handling"""
@@ -84,35 +133,75 @@ class GlobalModelsManager:
     async def download_model(self, model_path):
         """Download a specific model from global storage"""
         if not self.aws_configured or not self.s3_models_base:
+            global_models_progress_store[model_path] = {"progress": 0, "status": "failed", "error": "AWS not configured"}
             return False
         
         try:
-            # Parse model path (e.g., "checkpoints/model.safetensors")
             path_parts = model_path.split('/')
             if len(path_parts) < 2:
+                global_models_progress_store[model_path] = {"progress": 0, "status": "failed", "error": "Invalid model path"}
                 return False
             
             category = path_parts[0]
             filename = '/'.join(path_parts[1:])
             
-            s3_path = f"{self.s3_models_base}{category}/{filename}"
+            s3_full_path = f"{self.s3_models_base}{category}/{filename}"
             local_path = self.models_dir / category / filename
             
-            # Create local directory if it doesn't exist
             local_path.parent.mkdir(parents=True, exist_ok=True)
+
+            total_size = self._get_s3_model_size(s3_full_path)
             
-            command = ['aws', 's3', 'cp', s3_path, str(local_path)]
-            success, output = self._run_aws_command(command, timeout=600)  # 10 minute timeout
+            global_models_progress_store[model_path] = {
+                "progress": 0, 
+                "status": "downloading",
+                "total_size": total_size,
+                "downloaded_size": 0
+            }
+
+            command = ['aws', 's3', 'cp', s3_full_path, str(local_path)]
+
+            def do_download():
+                return self._run_aws_command(command, timeout=600)
+
+            download_task = asyncio.to_thread(do_download)
             
+            progress_task = asyncio.create_task(self._monitor_progress(model_path, local_path, total_size))
+
+            success, output = await download_task
+            
+            if global_models_progress_store.get(model_path):
+                global_models_progress_store[model_path]["status"] = "finishing"
+            
+            await progress_task
+
             if success:
                 print(f"Successfully downloaded {model_path} to {local_path}")
+                if local_path.exists():
+                    final_size = local_path.stat().st_size
+                else:
+                    final_size = total_size if total_size else 0
+
+                global_models_progress_store[model_path] = {
+                    "progress": 100, 
+                    "status": "downloaded",
+                    "total_size": total_size or final_size,
+                    "downloaded_size": final_size
+                }
                 return True
             else:
                 print(f"Failed to download {model_path}: {output}")
+                global_models_progress_store[model_path] = {"progress": 0, "status": "failed", "error": output}
+                if local_path.exists():
+                    try:
+                        local_path.unlink()
+                    except OSError as e:
+                        print(f"Error cleaning up failed download {local_path}: {e}")
                 return False
                 
         except Exception as e:
             print(f"Error downloading model {model_path}: {e}")
+            global_models_progress_store[model_path] = {"progress": 0, "status": "failed", "error": str(e)}
             return False
 
     async def upload_model(self, local_path):

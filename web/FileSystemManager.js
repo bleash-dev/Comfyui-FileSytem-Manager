@@ -24,6 +24,8 @@ export class FileSystemManager {
             autoDownload: true,
             lastAnalysis: null
         };
+        this.missingModelsHandler = null;
+        this.setupMissingModelsHandler();
         this.startGlobalModelsMonitoring();
         this.startWorkflowMonitoring();
     }
@@ -351,28 +353,59 @@ export class FileSystemManager {
             this.modal,
             this.currentContents,
             (item, e) => this.handleItemClick(item, e),
-            (path) => this.navigateToPath(path),
+            (path) => this.navigateToPath(path), // Navigation callback
             (item, triggerElement) => this.showItemContextMenu(item, triggerElement),
-            (item) => this.handleGlobalModelDownload(item) // Add global model download handler
+            (item) => this.handleGlobalModelDownload(item)
         );
         
         this.updateItemCount();
+        
+        // Ensure navigation links are properly attached after rendering
+        this.attachNavigationHandlers();
+    }
+
+    attachNavigationHandlers() {
+        if (!this.modal) return;
+        
+        // Find all directory name links and ensure they have proper click handlers
+        const directoryLinks = this.modal.querySelectorAll('.fs-item-name-link[data-type="directory"]');
+        directoryLinks.forEach(link => {
+            // Remove any existing listeners
+            link.removeEventListener('click', this.handleDirectoryLinkClick);
+            
+            // Add the navigation click handler
+            link.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const path = link.dataset.path;
+                if (path) {
+                    console.log('Navigating to directory:', path);
+                    this.navigateToPath(path);
+                }
+            });
+        });
     }
 
     handleItemClick(item, e) {
-        this.closeActiveContextMenu(); // Close context menu on any item click
+        this.closeActiveContextMenu();
         const itemPath = item.path;
         const isNameLinkClicked = e.target.closest('.fs-item-name-link');
 
+        // If it's a directory link click, handle navigation
+        if (isNameLinkClicked && item.type === 'directory') {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('Directory link clicked, navigating to:', itemPath);
+            this.navigateToPath(itemPath);
+            return;
+        }
+
+        // Handle selection
         if (e.ctrlKey || e.metaKey) {
             this.toggleSelection(itemPath);
         } else {
-            // If the name link was clicked, navigation is handled separately.
-            // For selection purposes, a single click on the link or row behaves the same.
             this.selectItem(itemPath);
         }
-        // If it's a directory and the name link was clicked, navigation is handled by the link's own event listener.
-        // If it's a directory and other part of the row was clicked, it's just selected.
     }
 
     handleItemDoubleClick(item) {
@@ -1576,5 +1609,640 @@ export class FileSystemManager {
                 clearInterval(updateInterval);
             }
         }, 1000);
+    }
+
+    setupMissingModelsHandler() {
+        // Set up a mutation observer to detect when missing models dialog appears
+        const observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                mutation.addedNodes.forEach((node) => {
+                    if (node.nodeType === Node.ELEMENT_NODE) {
+                        // Check if this is the missing models dialog
+                        const missingModelsDialog = node.querySelector?.('.comfy-missing-models') || 
+                                                  (node.classList?.contains('comfy-missing-models') ? node : null);
+                        
+                        if (missingModelsDialog) {
+                            this.initializeMissingModelsDialog(node);
+                        }
+                    }
+                });
+            });
+        });
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+    }
+
+    initializeMissingModelsDialog(dialogElement) {
+        console.log('Missing models dialog detected, setting up download handlers');
+        
+        // Add custom CSS for better layout
+        this.addMissingModelsStyles();
+        
+        // Find all download buttons in the dialog
+        const downloadButtons = dialogElement.querySelectorAll('button[aria-label*="Download"]');
+        
+        downloadButtons.forEach((button, index) => {
+            // Extract model information from the button and its parent elements
+            const modelInfo = this.extractModelInfoFromButton(button);
+            
+            if (modelInfo) {
+                // Store original click handler and replace with our custom handler
+                const originalHandler = button.onclick;
+                button.onclick = null;
+                
+                // Remove existing event listeners by cloning the button
+                const newButton = button.cloneNode(true);
+                button.parentNode.replaceChild(newButton, button);
+                
+                // Add our custom download handler
+                newButton.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    this.handleMissingModelDownload(modelInfo, newButton);
+                });
+                
+                // Improve the layout of the list item
+                this.improveMissingModelLayout(newButton, modelInfo);
+                
+                // Add progress container for this model
+                this.addProgressContainer(newButton, modelInfo);
+            }
+        });
+    }
+
+    addMissingModelsStyles() {
+        // Add custom styles for missing models dialog if not already added
+        if (document.querySelector('#missing-models-custom-styles')) return;
+        
+        const style = document.createElement('style');
+        style.id = 'missing-models-custom-styles';
+        style.textContent = `
+            .comfy-missing-models .p-listbox-option {
+                padding: 16px !important;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
+                transition: background-color 0.2s ease !important;
+            }
+            
+            .comfy-missing-models .p-listbox-option:hover {
+                background-color: rgba(255, 255, 255, 0.05) !important;
+            }
+            
+            .fs-missing-model-container {
+                display: flex;
+                flex-direction: column;
+                gap: 12px;
+                width: 100%;
+            }
+            
+            .fs-missing-model-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 12px;
+            }
+            
+            .fs-missing-model-info {
+                flex: 1;
+                min-width: 0;
+            }
+            
+            .fs-missing-model-title {
+                font-weight: 600;
+                font-size: 14px;
+                color: var(--input-text);
+                margin-bottom: 4px;
+                word-break: break-word;
+            }
+            
+            .fs-missing-model-path {
+                font-size: 12px;
+                color: rgba(255, 255, 255, 0.7);
+                font-family: monospace;
+            }
+            
+            .fs-missing-model-actions {
+                display: flex;
+                gap: 8px;
+                align-items: center;
+                flex-shrink: 0;
+            }
+            
+            .fs-missing-model-progress {
+                margin-top: 8px;
+                padding: 12px;
+                background-color: rgba(255, 255, 255, 0.03);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 6px;
+                border-left: 3px solid #007bff;
+            }
+            
+            .fs-progress-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 8px;
+            }
+            
+            .fs-progress-text {
+                color: var(--input-text);
+                font-size: 12px;
+                font-weight: 500;
+            }
+            
+            .fs-progress-percentage {
+                color: #007bff;
+                font-size: 11px;
+                font-weight: 600;
+            }
+            
+            .fs-cancel-download {
+                background: #dc3545;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                width: 20px;
+                height: 20px;
+                font-size: 10px;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 0;
+                transition: all 0.2s ease;
+            }
+            
+            .fs-cancel-download:hover {
+                background: #c82333;
+                transform: scale(1.05);
+            }
+            
+            .fs-progress-bar-container {
+                width: 100%;
+                height: 6px;
+                background-color: rgba(255, 255, 255, 0.1);
+                border-radius: 3px;
+                overflow: hidden;
+                position: relative;
+            }
+            
+            .fs-progress-bar-fill {
+                height: 100%;
+                background: linear-gradient(90deg, #007bff, #0056b3);
+                transition: width 0.3s ease;
+                border-radius: 3px;
+                position: relative;
+            }
+            
+            .fs-progress-bar-fill::after {
+                content: '';
+                position: absolute;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: linear-gradient(
+                    90deg,
+                    transparent 0%,
+                    rgba(255, 255, 255, 0.3) 50%,
+                    transparent 100%
+                );
+                animation: shimmer 2s infinite;
+            }
+            
+            @keyframes shimmer {
+                0% { transform: translateX(-100%); }
+                100% { transform: translateX(100%); }
+            }
+            
+            .fs-download-complete {
+                text-align: center;
+                padding: 12px;
+                font-weight: 600;
+                color: #28a745;
+                background-color: rgba(40, 167, 69, 0.1);
+                border: 1px solid rgba(40, 167, 69, 0.3);
+                border-radius: 6px;
+            }
+            
+            .fs-download-error {
+                text-align: center;
+                padding: 12px;
+                background-color: rgba(220, 53, 69, 0.1);
+                border: 1px solid rgba(220, 53, 69, 0.3);
+                border-radius: 6px;
+            }
+            
+            .fs-download-error-text {
+                color: #dc3545;
+                font-size: 12px;
+                margin-bottom: 8px;
+            }
+            
+            .fs-retry-download {
+                background: #007bff;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 11px;
+                padding: 6px 12px;
+                transition: all 0.2s ease;
+                font-weight: 500;
+            }
+            
+            .fs-retry-download:hover {
+                background: #0056b3;
+                transform: translateY(-1px);
+            }
+            
+            .comfy-missing-models button[aria-label*="Download"] {
+                background: linear-gradient(135deg, #007bff, #0056b3) !important;
+                color: white !important;
+                border: none !important;
+                padding: 8px 16px !important;
+                border-radius: 6px !important;
+                font-size: 12px !important;
+                cursor: pointer !important;
+                transition: all 0.2s ease !important;
+                font-weight: 500 !important;
+                box-shadow: 0 2px 4px rgba(0, 123, 255, 0.3) !important;
+            }
+            
+            .comfy-missing-models button[aria-label*="Download"]:hover {
+                background: linear-gradient(135deg, #0056b3, #004494) !important;
+                transform: translateY(-1px) !important;
+                box-shadow: 0 4px 8px rgba(0, 123, 255, 0.4) !important;
+            }
+            
+            .comfy-missing-models button[aria-label*="Copy URL"] {
+                background: rgba(108, 117, 125, 0.2) !important;
+                color: var(--input-text) !important;
+                border: 1px solid rgba(108, 117, 125, 0.5) !important;
+                padding: 8px 16px !important;
+                border-radius: 6px !important;
+                font-size: 12px !important;
+                cursor: pointer !important;
+                transition: all 0.2s ease !important;
+                font-weight: 500 !important;
+            }
+            
+            .comfy-missing-models button[aria-label*="Copy URL"]:hover {
+                background: rgba(108, 117, 125, 0.3) !important;
+                transform: translateY(-1px) !important;
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    improveMissingModelLayout(button, modelInfo) {
+        // Find the list item container
+        const listItem = button.closest('li[role="option"]');
+        if (!listItem) return;
+        
+        // Find the existing content div
+        const existingContent = listItem.querySelector('div[data-v-7a5ec643]');
+        if (!existingContent) return;
+        
+        // Create new structured layout
+        const container = document.createElement('div');
+        container.className = 'fs-missing-model-container';
+        
+        // Create header with model info and actions
+        const header = document.createElement('div');
+        header.className = 'fs-missing-model-header';
+        
+        // Model info section
+        const infoSection = document.createElement('div');
+        infoSection.className = 'fs-missing-model-info';
+        
+        const titleElement = document.createElement('div');
+        titleElement.className = 'fs-missing-model-title';
+        titleElement.textContent = modelInfo.filename;
+        
+        const pathElement = document.createElement('div');
+        pathElement.className = 'fs-missing-model-path';
+        pathElement.textContent = `${modelInfo.category}/${modelInfo.filename}`;
+        
+        infoSection.appendChild(titleElement);
+        infoSection.appendChild(pathElement);
+        
+        // Actions section
+        const actionsSection = document.createElement('div');
+        actionsSection.className = 'fs-missing-model-actions';
+        
+        // Move existing buttons to actions section
+        const downloadBtn = existingContent.querySelector('button[aria-label*="Download"]');
+        const copyBtn = existingContent.querySelector('button[aria-label*="Copy URL"]');
+        
+        if (downloadBtn) actionsSection.appendChild(downloadBtn);
+        if (copyBtn) actionsSection.appendChild(copyBtn);
+        
+        header.appendChild(infoSection);
+        header.appendChild(actionsSection);
+        container.appendChild(header);
+        
+        // Replace existing content
+        existingContent.replaceWith(container);
+    }
+
+    addProgressContainer(button, modelInfo) {
+        // Find the container
+        const container = button.closest('.fs-missing-model-container');
+        if (!container) return;
+        
+        // Create progress container
+        const progressContainer = document.createElement('div');
+        progressContainer.className = 'fs-missing-model-progress';
+        progressContainer.style.display = 'none';
+        progressContainer.innerHTML = `
+            <div class="fs-progress-header">
+                <span class="fs-progress-text">Preparing download...</span>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <span class="fs-progress-percentage">0%</span>
+                    <button class="fs-cancel-download" title="Cancel Download">×</button>
+                </div>
+            </div>
+            <div class="fs-progress-bar-container">
+                <div class="fs-progress-bar-fill" style="width: 0%"></div>
+            </div>
+        `;
+
+        // Add to container
+        container.appendChild(progressContainer);
+
+        // Add cancel button handler
+        const cancelBtn = progressContainer.querySelector('.fs-cancel-download');
+        cancelBtn.addEventListener('click', () => {
+            this.cancelMissingModelDownload(modelInfo);
+        });
+    }
+
+    async handleMissingModelDownload(modelInfo, button) {
+        console.log('Starting download for model:', modelInfo);
+
+        // Find the progress container in the new layout
+        const container = button.closest('.fs-missing-model-container');
+        const progressContainer = container?.querySelector('.fs-missing-model-progress');
+        // Hide button and show progress
+        button.style.display = 'none';
+        if (progressContainer) {
+            progressContainer.style.display = 'block';
+        }
+
+        // Generate session ID
+        const sessionId = `missing_model_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+        try {
+            // Start progress polling
+            this.startMissingModelProgressPolling(sessionId, modelInfo, button);
+            // Call the direct upload endpoint
+            const response = await api.fetchApi('/filesystem/upload_from_direct_url', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    direct_url: modelInfo.url,
+                    path: `models/${modelInfo.category}`,
+                    filename: modelInfo.filename,
+                    overwrite: true,
+                    session_id: sessionId
+                })
+            });
+
+
+            if (!response.ok) {
+                const errorResult = await response.json();
+                throw new Error(errorResult.error || `Request failed: ${response.statusText}`);
+            }
+
+        } catch (error) {
+            console.error('Error starting model download:', error);
+            this.showModelDownloadError(modelInfo, button, error.message);
+        }
+    }
+
+    startMissingModelProgressPolling(sessionId, modelInfo, button) {
+        const container = button.closest('.fs-missing-model-container');
+        const progressContainer = container?.querySelector('.fs-missing-model-progress');
+        const progressText = progressContainer?.querySelector('.fs-progress-text');
+        const progressFill = progressContainer?.querySelector('.fs-progress-bar-fill');
+        const progressPercentage = progressContainer?.querySelector('.fs-progress-percentage');
+
+        // Always show the progress container while polling
+        if (progressContainer) {
+            progressContainer.style.display = 'block';
+        }
+
+        const pollInterval = setInterval(async () => {
+            try {
+                const response = await api.fetchApi(`/filesystem/direct_upload_progress/${sessionId}`);
+                const progress = await response.json();
+
+                // Update progress UI with enhanced feedback
+                if (progressText) {
+                    progressText.textContent = progress.message || 'Downloading...';
+                }
+                if (progressFill) {
+                    const percentage = progress.percentage || 0;
+                    progressFill.style.width = `${percentage}%`;
+                }
+                if (progressPercentage) {
+                    progressPercentage.textContent = `${Math.round(progress.percentage || 0)}%`;
+                }
+
+                // Handle completion or error
+                if (progress.status === 'completed') {
+                    clearInterval(pollInterval);
+                    this.showModelDownloadComplete(modelInfo, button);
+                } else if (progress.status === 'error') {
+                    clearInterval(pollInterval);
+                    this.showModelDownloadError(modelInfo, button, progress.message);
+                } else if (progress.status === 'cancelled') {
+                    clearInterval(pollInterval);
+                    this.resetModelDownloadUI(modelInfo, button);
+                }
+
+            } catch (error) {
+                console.error('Error polling progress:', error);
+                clearInterval(pollInterval);
+                this.showModelDownloadError(modelInfo, button, 'Failed to check progress');
+            }
+        }, 500); // Poll every 500ms for more responsive updates
+
+        // Store interval for potential cancellation
+        modelInfo.pollInterval = pollInterval;
+        modelInfo.sessionId = sessionId;
+    }
+
+    showModelDownloadComplete(modelInfo, button) {
+        const container = button.closest('.fs-missing-model-container');
+        const progressContainer = container?.querySelector('.fs-missing-model-progress');
+        if (progressContainer) {
+            progressContainer.innerHTML = `
+                <div class="fs-download-complete">
+                    <span>✅ Download Complete</span>
+                    <div style="font-size: 11px; margin-top: 4px; opacity: 0.8;">
+                        ${modelInfo.filename} is now available
+                    </div>
+                </div>
+            `;
+            progressContainer.style.display = 'block';
+        }
+        button.style.display = 'none';
+    }
+
+    showModelDownloadError(modelInfo, button, errorMessage) {
+        const container = button.closest('.fs-missing-model-container');
+        const progressContainer = container?.querySelector('.fs-missing-model-progress');
+        if (progressContainer) {
+            progressContainer.innerHTML = `
+                <div class="fs-download-error">
+                    <div class="fs-download-error-text">❌ ${errorMessage}</div>
+                    <button class="fs-retry-download">🔄 Retry Download</button>
+                </div>
+            `;
+            progressContainer.style.display = 'block';
+
+            // Add retry handler
+            const retryBtn = progressContainer.querySelector('.fs-retry-download');
+            if (retryBtn) {
+                retryBtn.addEventListener('click', () => {
+                    this.resetModelDownloadUI(modelInfo, button);
+                    // Trigger download again
+                    this.handleMissingModelDownload(modelInfo, button);
+                });
+            }
+        }
+    }
+
+    resetModelDownloadUI(modelInfo, button) {
+        const container = button.closest('.fs-missing-model-container');
+        const progressContainer = container?.querySelector('.fs-missing-model-progress');
+        if (progressContainer) {
+            progressContainer.style.display = 'none';
+            // Reset progress container content
+            progressContainer.innerHTML = `
+                <div class="fs-progress-header">
+                    <span class="fs-progress-text">Preparing download...</span>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="fs-progress-percentage">0%</span>
+                        <button class="fs-cancel-download" title="Cancel Download">×</button>
+                    </div>
+                </div>
+                <div class="fs-progress-bar-container">
+                    <div class="fs-progress-bar-fill" style="width: 0%"></div>
+                </div>
+            `;
+            
+            // Re-attach cancel handler
+            const cancelBtn = progressContainer.querySelector('.fs-cancel-download');
+            cancelBtn.addEventListener('click', () => {
+                this.cancelMissingModelDownload(modelInfo);
+            });
+        }
+        button.style.display = 'inline-block';
+        
+        // Clean up polling
+        if (modelInfo.pollInterval) {
+            clearInterval(modelInfo.pollInterval);
+            delete modelInfo.pollInterval;
+        }
+        delete modelInfo.sessionId;
+    }
+
+    extractModelInfoFromButton(button) {
+        try {
+            // Get the URL from title or aria-label
+            const url = button.title || button.getAttribute('title');
+            if (!url) return null;
+
+            // Get model path and filename from the parent structure
+            const listItem = button.closest('li[role="option"]');
+            if (!listItem) return null;
+
+            const modelSpan = listItem.querySelector('span[title]');
+            if (!modelSpan) return null;
+
+            const modelPath = modelSpan.textContent.trim();
+            
+            // Parse the model path (e.g., "checkpoints / dreamshaper_8.safetensors")
+            const pathParts = modelPath.split(' / ');
+            if (pathParts.length !== 2) return null;
+
+            const [category, filename] = pathParts;
+            const extension = filename.split('.').pop();
+            const nameWithoutExt = filename.replace(`.${extension}`, '');
+
+            // Extract file size from button text
+            const sizeMatch = button.textContent.match(/\(([^)]+)\)/);
+            const size = sizeMatch ? sizeMatch[1] : 'Unknown size';
+
+            return {
+                url: url.trim(),
+                category: category.trim(),
+                filename: filename.trim(),
+                nameWithoutExt: nameWithoutExt,
+                extension: extension,
+                size: size,
+                fullPath: `models/${category.trim()}/${filename.trim()}`
+            };
+        } catch (error) {
+            console.error('Error extracting model info:', error);
+            return null;
+        }
+    }
+
+    async cancelMissingModelDownload(modelInfo) {
+        console.log('Cancelling download for model:', modelInfo);
+        
+        try {
+            if (modelInfo.sessionId) {
+                // Send cancellation request to the server
+                const response = await api.fetchApi('/filesystem/cancel_download', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        session_id: modelInfo.sessionId,
+                        download_type: 'direct-link'
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    console.log('Model download cancelled successfully');
+                } else {
+                    console.error('Failed to cancel model download:', result.error);
+                }
+            }
+            
+            // Clean up polling interval
+            if (modelInfo.pollInterval) {
+                clearInterval(modelInfo.pollInterval);
+                delete modelInfo.pollInterval;
+            }
+            
+            // Reset UI - find the button associated with this modelInfo
+            const containers = document.querySelectorAll('.fs-missing-model-container');
+            for (const container of containers) {
+                const titleElement = container.querySelector('.fs-missing-model-title');
+                if (titleElement && titleElement.textContent === modelInfo.filename) {
+                    const button = container.querySelector('button[aria-label*="Download"]');
+                    if (button) {
+                        this.resetModelDownloadUI(modelInfo, button);
+                        break;
+                    }
+                }
+            }
+            
+        } catch (error) {
+            console.error('Error cancelling model download:', error);
+        }
     }
 }

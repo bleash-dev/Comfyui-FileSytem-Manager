@@ -924,6 +924,120 @@ style.textContent = `
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+
+/* Missing Models Dialog Styles */
+.fs-missing-model-progress {
+    margin-top: 8px;
+    padding: 8px;
+    background-color: var(--comfy-input-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    font-size: 11px;
+}
+
+.fs-progress-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+}
+
+.fs-progress-text {
+    color: var(--input-text);
+    font-size: 10px;
+}
+
+.fs-cancel-download {
+    background: #dc3545;
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 16px;
+    height: 16px;
+    font-size: 10px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.fs-cancel-download:hover {
+    background: #c82333;
+}
+
+.fs-progress-bar-container {
+    width: 100%;
+    height: 4px;
+    background-color: rgba(255, 255, 255, 0.2);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.fs-progress-bar-fill {
+    height: 100%;
+    background-color: #007bff;
+    transition: width 0.3s ease;
+    border-radius: 2px;
+}
+
+.fs-download-complete {
+    text-align: center;
+    padding: 4px;
+    font-weight: bold;
+}
+
+.fs-download-error {
+    text-align: center;
+    padding: 4px;
+}
+
+.fs-retry-download {
+    background: #007bff;
+    color: white;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 10px !important;
+    padding: 2px 6px !important;
+}
+
+.fs-retry-download:hover {
+    background: #0056b3;
+}
+
+/* Ensure missing models listbox items have proper spacing */
+.comfy-missing-models .p-listbox-option {
+    padding: 12px !important;
+}
+
+.comfy-missing-models .p-listbox-option > div {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* Style the download buttons in missing models dialog */
+.comfy-missing-models button[aria-label*="Download"] {
+    background-color: #007bff !important;
+    color: white !important;
+    border: none !important;
+    padding: 4px 8px !important;
+    border-radius: 3px !important;
+    font-size: 11px !important;
+    cursor: pointer !important;
+    transition: background-color 0.2s ease !important;
+}
+
+.comfy-missing-models button[aria-label*="Download"]:hover {
+    background-color: #0056b3 !important;
+}
+
+.comfy-missing-models button[aria-label*="Download"]:disabled {
+    background-color: #6c757d !important;
+    cursor: not-allowed !important;
+    opacity: 0.6 !important;
+}
 `;
 document.head.appendChild(style);
-    
+

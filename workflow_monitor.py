@@ -1,13 +1,13 @@
 import os
 import json
-import asyncio
-import re
 from pathlib import Path
-from typing import Dict, List, Set, Optional, Tuple
+from typing import Dict, List, Set, Optional
 import subprocess
+
 import folder_paths
 from server import PromptServer
 from aiohttp import web
+
 
 try:
     from .global_models_manager import GlobalModelsManager
@@ -15,6 +15,7 @@ try:
 except ImportError:
     print("Global models manager not available for workflow monitoring")
     global_models_manager = None
+
 
 class WorkflowMonitor:
     def __init__(self):
@@ -51,22 +52,20 @@ class WorkflowMonitor:
         
     def _get_model_categories(self) -> List[str]:
         """Get all model categories from folder_paths"""
-        categories = []
-        
         # Standard ComfyUI model folders
         standard_categories = [
-            'checkpoints', 'vae', 'loras', 'controlnet', 'clip_vision', 
+            'checkpoints', 'vae', 'loras', 'controlnet', 'clip_vision',
             'style_models', 'embeddings', 'diffusers', 'unet', 'gligen',
             'upscale_models', 'custom_nodes', 'hypernetworks', 'photomaker',
             'clip', 'diffusion_models', 'vae_approx', 'text_encoders', 'sonic'
         ]
-        
+
         # Add from folder_paths if available
         if hasattr(folder_paths, 'folder_names_and_paths'):
             for category in folder_paths.folder_names_and_paths.keys():
                 if category not in standard_categories:
                     standard_categories.append(category)
-        
+
         return standard_categories
     
     def extract_model_paths_from_workflow(self, workflow_data: dict) -> Set[str]:
@@ -301,18 +300,24 @@ class WorkflowMonitor:
                     # Create local directory if it doesn't exist
                     local_path.parent.mkdir(parents=True, exist_ok=True)
                     
-                    # Use AWS CLI to download
-                    s3_path = f"s3://{bucket}/pod_sessions/global_shared/models/{model_path}"
-                    command = ['aws', 's3', 'cp', s3_path, str(local_path)]
-                    
-                    success, output = self._run_aws_command(command, timeout=600)  # 10 minute timeout
-                    
-                    if success:
+                    # Use global_models_manager to download with progress
+                    s3_path = model_info.get('s3_path')
+                    if not s3_path:
+                        download_results[model_path] = "failed: no s3_path"
+                        print(f"❌ Failed to download {model_path}: No S3 path provided")
+                        continue
+
+                    try:
+                        await global_models_manager.download_model(
+                            s3_path=s3_path,
+                            local_path=str(local_path),
+                            model_id=model_path # Use model_path as a unique ID for progress tracking
+                        )
                         download_results[model_path] = "downloaded"
                         print(f"✅ Successfully downloaded: {model_path}")
-                    else:
-                        download_results[model_path] = "failed"
-                        print(f"❌ Failed to download {model_path}: {output}")
+                    except Exception as download_e:
+                        download_results[model_path] = f"failed: {str(download_e)}"
+                        print(f"❌ Failed to download {model_path}: {download_e}")
                         
                 except Exception as e:
                     download_results[model_path] = f"error: {str(e)}"
@@ -371,8 +376,10 @@ class WorkflowMonitor:
         workflow_str = json.dumps(workflow_data, sort_keys=True)
         return hashlib.md5(workflow_str.encode()).hexdigest()
 
+
 # Global workflow monitor instance
 workflow_monitor = WorkflowMonitor()
+
 
 # API Endpoints
 @PromptServer.instance.routes.post("/filesystem/analyze_workflow")
@@ -394,12 +401,13 @@ async def analyze_workflow(request):
             "success": True,
             "analysis": analysis
         })
-        
+
     except Exception as e:
         return web.json_response({
             "success": False,
             "error": str(e)
         }, status=500)
+
 
 @PromptServer.instance.routes.post("/filesystem/auto_download_missing")
 async def auto_download_missing(request):
@@ -420,12 +428,13 @@ async def auto_download_missing(request):
             "success": True,
             "download_results": download_results
         })
-        
+
     except Exception as e:
         return web.json_response({
             "success": False,
             "error": str(e)
         }, status=500)
+
 
 @PromptServer.instance.routes.get("/filesystem/workflow_monitor_status")
 async def get_monitor_status(request):
@@ -440,12 +449,13 @@ async def get_monitor_status(request):
                 "missing_models": list(workflow_monitor.missing_models)
             }
         })
-        
+
     except Exception as e:
         return web.json_response({
             "success": False,
             "error": str(e)
         }, status=500)
+
 
 @PromptServer.instance.routes.post("/filesystem/toggle_auto_download")
 async def toggle_auto_download(request):
