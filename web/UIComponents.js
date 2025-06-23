@@ -349,12 +349,12 @@ export class UIComponents {
             if (item.global_exists && !item.local_exists) {
                 return '<p><span class="fs-item-icon">🌐📁</span></p>';
             } else if (item.global_exists && item.local_exists) {
-                return '<p><span class="fs-item-icon">📁✅</span></p>';
+                return '<p><span class="fs-item-icon">✅📁</span></p>';
             }
             return '<p><span class="fs-item-icon">📁</span></p>';
         } else {
             if (item.global_exists && !item.local_exists) {
-                return '<p><span class="fs-item-icon">📄🌐</span></p>';
+                return '<p><span class="fs-item-icon">🌐📄</span></p>';
             }
             const extension = item.name.split('.').pop().toLowerCase();
             if (['safetensors', 'ckpt', 'pt', 'pth', 'bin'].includes(extension)) {
