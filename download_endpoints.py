@@ -69,6 +69,9 @@ class FileSystemDownloadAPI:
                 headers={
                     hdrs.CONTENT_TYPE: 'application/octet-stream',
                     hdrs.CONTENT_DISPOSITION: f'attachment; filename="{filename}"',
+                    hdrs.ACCESS_CONTROL_ALLOW_HEADERS: "*",
+                    hdrs.ACCESS_CONTROL_ALLOW_METHODS: "*",
+                    hdrs.ACCESS_CONTROL_ALLOW_ORIGIN: "*",
                     hdrs.CONTENT_LENGTH: str(file_size)
                 }
             )

@@ -316,7 +316,6 @@ export class UIComponents {
             
             // Ensure we have a valid model path
             if (!modelPath || modelPath.trim() === '') {
-                console.warn('Invalid model path for global model:', item);
                 return `<span class="fs-item-name" style="flex: 1;">${item.name}</span>`;
             }
             
@@ -365,11 +364,23 @@ export class UIComponents {
     }
 
     static showGlobalModelProgress(modal, modelPath, progress) {
+        // Add safety check for modal
+        if (!modal) {
+            console.warn('Modal is null, cannot show progress for:', modelPath);
+            return;
+        }
+        
         const downloadBtn = modal.querySelector(`[data-model-path="${modelPath}"]`);
-        if (!downloadBtn) return;
+        if (!downloadBtn) {
+            console.warn('Download button not found for model:', modelPath);
+            return;
+        }
         
         const container = downloadBtn.closest('tr');
-        if (!container) return;
+        if (!container) {
+            console.warn('Container row not found for model:', modelPath);
+            return;
+        }
         
         let progressContainer = container.querySelector('.fs-global-progress');
         if (!progressContainer) {
@@ -384,8 +395,13 @@ export class UIComponents {
             `;
             
             const nameCell = downloadBtn.closest('.fs-item');
-            nameCell.appendChild(progressContainer);
-            downloadBtn.style.display = 'none';
+            if (nameCell) {
+                nameCell.appendChild(progressContainer);
+                downloadBtn.style.display = 'none';
+            } else {
+                console.warn('Name cell not found for model:', modelPath);
+                return;
+            }
         }
         
         const progressFill = progressContainer.querySelector('.fs-global-progress-fill');
@@ -439,11 +455,15 @@ export class UIComponents {
         if (progress.status === 'downloaded') {
             progressText.textContent = 'Download complete!';
             progressText.style.color = '#28a745';
-            cancelBtn.style.display = 'none';
+            if (cancelBtn) cancelBtn.style.display = 'none';
             
             setTimeout(() => {
-                progressContainer.remove();
-                downloadBtn.style.display = 'inline-block';
+                if (progressContainer && progressContainer.parentNode) {
+                    progressContainer.remove();
+                }
+                if (downloadBtn) {
+                    downloadBtn.style.display = 'inline-block';
+                }
                 
                 // Trigger refresh event
                 const refreshEvent = new CustomEvent('globalModelDownloaded', {
@@ -452,7 +472,7 @@ export class UIComponents {
                 modal.dispatchEvent(refreshEvent);
             }, 2000);
         } else if (progress.status === 'failed' || progress.status === 'cancelled') {
-            cancelBtn.style.display = 'none';
+            if (cancelBtn) cancelBtn.style.display = 'none';
             
             // Add retry button for failed downloads
             if (progress.status === 'failed') {
@@ -464,9 +484,13 @@ export class UIComponents {
                     retryBtn.title = 'Retry Download';
                     retryBtn.addEventListener('click', (e) => {
                         e.stopPropagation();
-                        progressContainer.remove();
-                        downloadBtn.style.display = 'inline-block';
-                        downloadBtn.click();
+                        if (progressContainer && progressContainer.parentNode) {
+                            progressContainer.remove();
+                        }
+                        if (downloadBtn) {
+                            downloadBtn.style.display = 'inline-block';
+                            downloadBtn.click();
+                        }
                     });
                     progressContainer.appendChild(retryBtn);
                 }
@@ -475,6 +499,12 @@ export class UIComponents {
     }
 
     static hideGlobalModelProgress(modal, modelPath) {
+        // Add safety check for modal
+        if (!modal) {
+            console.warn('Modal is null, cannot hide progress for:', modelPath);
+            return;
+        }
+        
         const downloadBtn = modal.querySelector(`[data-model-path="${modelPath}"]`);
         if (!downloadBtn) return;
         
