@@ -1,46 +1,45 @@
 import os
-from playwright.async_api import async_playwright
 from .screenshots import ScreenshotManager
 from .progress import ProgressTracker
+from ..shared_browser_session import SharedBrowserSessionManager
 
 class BrowserAutomation:
     def __init__(self):
         self.screenshot_manager = ScreenshotManager()
+        self.session_manager = SharedBrowserSessionManager()
 
-    async def check_hf_access_with_playwright(self, hf_url: str, session_id: str = None):
+    async def check_hf_access_with_playwright(self, hf_url: str,
+                                              session_id: str = None):
         """
-        Use Playwright to check if we have access to the HF repository and request access if needed.
-        Returns: (has_access: bool, needs_auth: bool, error_message: str or None)
+        Use Playwright to check if we have access to the HF repository and
+        request access if needed.
+        Returns: (has_access: bool, needs_auth: bool, 
+                 error_message: str or None)
         """
-        ProgressTracker.update_progress(session_id, "Checking repository access...", 15)
+        ProgressTracker.update_progress(session_id,
+                                        "Checking repository access...", 15)
         
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=['--no-sandbox', '--disable-setuid-sandbox']
-            )
+        try:
+            # Ensure authentication first
+            await self.session_manager.ensure_authenticated('huggingface')
+            
+            # Create a page using the shared session
+            page = await self.session_manager.create_page('huggingface')
             
             try:
-                context = await browser.new_context(
-                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                )
-                
-                page = await context.new_page()
-                
-                # Always login first
-                ProgressTracker.update_progress(session_id, "Attempting login to Hugging Face...", 20)
-                login_success = await self._login_to_huggingface(page, session_id)
-                
-                if not login_success:
-                    await self.screenshot_manager.take_screenshot(page, "login_failed", "Login attempt failed")
-                    return False, True, "Failed to login to Hugging Face"
-                
-                # After successful login, check repository access
-                has_access, error_msg = await self._check_repository_access_after_login(page, hf_url, session_id)
+                # Check repository access
+                has_access, error_msg = \
+                    await self._check_repository_access_after_login(
+                        page, hf_url, session_id)
                 return has_access, True, error_msg
-                
             finally:
-                await browser.close()
+                await page.close()
+                # Save session state after use
+                await self.session_manager.save_session_state('huggingface')
+                
+        except Exception as e:
+            error_msg = f"Browser automation error: {str(e)}"
+            return False, True, error_msg
 
     async def _check_repository_access_after_login(self, page, hf_url: str, session_id: str = None, max_attempts: int = 2):
         """Check repository access after login, with optional access request."""
@@ -87,55 +86,7 @@ class BrowserAutomation:
                 await self.screenshot_manager.take_screenshot(page, f"repo_access_error_attempt_{attempt}", f"Error during access check: {str(e)}")
                 if attempt == max_attempts:
                     return False, f"Error checking repository access: {str(e)}"
-                await page.wait_for_timeout(2000)
-        
         return False, "Unknown error checking repository access"
-
-    async def _login_to_huggingface(self, page, session_id: str = None) -> bool:
-        """Login to Hugging Face using credentials from environment"""
-        username = os.environ.get("HF_USERNAME")
-        password = os.environ.get("HF_PASSWORD")
-        
-        if not username or not password:
-            print("❌ HF_USERNAME or HF_PASSWORD not found in environment variables")
-            return False
-        
-        try:
-            ProgressTracker.update_progress(session_id, "Attempting to login...", 22)
-            
-            if not await self._navigate_with_fallback(page, "https://huggingface.co/login", "login page", 15000, 10000):
-                print("❌ Failed to load login page")
-                return False
-            
-            await self.screenshot_manager.take_screenshot(page, "login_page", "Hugging Face login page loaded")
-            
-            ProgressTracker.update_progress(session_id, "Entering credentials...", 28)
-            await page.fill('input[name="username"], input[placeholder*="Username"], input[placeholder*="Email"]', username)
-            await page.fill('input[name="password"], input[type="password"]', password)
-            
-            await self.screenshot_manager.take_screenshot(page, "login_form_filled", "Login form filled with credentials")
-            
-            ProgressTracker.update_progress(session_id, "Logging in...", 34)
-            await page.click('button[type="submit"], input[type="submit"], button:has-text("Login")')
-            
-            await page.wait_for_timeout(3000)
-            await self.screenshot_manager.take_screenshot(page, "login_attempt_result", "Page after login submission")
-            
-            logged_in = await self._check_login_success(page)
-            
-            if logged_in:
-                ProgressTracker.update_progress(session_id, "Login successful!", 38)
-                await self.screenshot_manager.take_screenshot(page, "login_successful", "Successful login confirmed")
-                return True
-            else:
-                print("❌ Login appears to have failed")
-                await self.screenshot_manager.take_screenshot(page, "login_failed_final", "Login verification failed")
-                return False
-                
-        except Exception as e:
-            print(f"❌ Error during login: {e}")
-            await self.screenshot_manager.take_screenshot(page, "login_exception", f"Exception during login: {str(e)}")
-            return False
 
     async def _check_page_has_access(self, page) -> bool:
         """Check if the current page indicates we have access to the repository/file"""

@@ -8,14 +8,17 @@ import shutil
 from pathlib import Path
 from playwright.async_api import async_playwright
 import folder_paths
-import torch # Assuming torch might be needed for .pth validation
+import torch  # Assuming torch might be needed for .pth validation
+from .shared_browser_session import SharedBrowserSessionManager
 
 # Global progress tracking
 progress_store = {}
 
+
 class GoogleDriveDownloaderAPI:
     def __init__(self):
         self.comfyui_base = folder_paths.base_path
+        self.session_manager = SharedBrowserSessionManager()
         
     def extract_file_id(self, url):
         """Extract file ID from various Google Drive URL formats"""
@@ -349,19 +352,14 @@ class GoogleDriveDownloaderAPI:
         if session_id and download_cancellation_flags.get(session_id):
             return False, None, None
         
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=['--no-sandbox', '--disable-setuid-sandbox']
-            )
+        try:
+            # Ensure authentication first
+            await self.session_manager.ensure_authenticated('google_drive')
+            
+            # Create a page using the shared session
+            page = await self.session_manager.create_page('google_drive')
             
             try:
-                context = await browser.new_context(
-                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                )
-                
-                page = await context.new_page()
-                
                 download_info = {"path": None, "completed": False, "filename": None}
                 
                 async def handle_download(download):
@@ -469,7 +467,13 @@ class GoogleDriveDownloaderAPI:
                             progress_callback("Direct download completed!", 65)
                 
             finally:
-                await browser.close()
+                await page.close()
+                # Save session state after use
+                await self.session_manager.save_session_state('google_drive')
+        
+        except Exception as e:
+            print(f"Google Drive download error: {e}")
+            return False, None, None
         
         return download_info["completed"], download_info.get("filename", ""), temp_download_path
 

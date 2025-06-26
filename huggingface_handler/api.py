@@ -36,6 +36,7 @@ class HuggingFaceDownloadAPI:
             
             parsed_url = self.utils.parse_hf_url(hf_url)
             repo_id = parsed_url["repo_id"]
+            hf_url = parsed_url["hf_url"]
             filename_in_repo = parsed_url["filename"]
             is_file_url = parsed_url["is_file_url"]
 
@@ -48,6 +49,7 @@ class HuggingFaceDownloadAPI:
 
             # Always attempt access check with Playwright first, but don't fail on errors
             try:
+                print(f"🔍 Checking Hugging Face access with Playwright... {hf_url}")
                 has_access, needed_auth, access_error = await self.browser_automation.check_hf_access_with_playwright(hf_url, session_id)
                 
                 if not has_access and not user_token:

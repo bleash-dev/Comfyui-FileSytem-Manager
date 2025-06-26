@@ -588,7 +588,7 @@ async def cancel_download_endpoint(request):
         data = await request.json()
         session_id = data.get('session_id')
         download_type = data.get('download_type') # e.g., 'google-drive', 'huggingface', 'civitai', 'direct-link'
-        
+
         if not session_id: return web.json_response({'success': False, 'error': 'Session ID missing'}, status=400)
         
         print(f"🚫 Download cancellation requested for session: {session_id} (type: {download_type})")
@@ -596,9 +596,11 @@ async def cancel_download_endpoint(request):
         if download_type == 'google-drive':
             # google_drive_handler should check its own cancellation mechanism if it has one
             # For now, we update its progress store directly.
+            download_cancellation_flags[session_id] = True
             gdrive_progress_store[session_id] = {"status": "cancelled", "message": "User cancelled", "percentage": 0}
         elif download_type == 'huggingface':
             # hf_handler should check its own cancellation flags
+            download_cancellation_flags[session_id] = True
             hf_progress_store[session_id] = {"status": "cancelled", "message": "User cancelled", "percentage": 0}
         elif download_type == 'civitai':
             # civitai_handler should check its own cancellation flags

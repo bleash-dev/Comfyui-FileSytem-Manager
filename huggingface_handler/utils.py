@@ -8,6 +8,7 @@ import folder_paths
 class HuggingFaceUtils:
     def __init__(self):
         self.comfyui_base = folder_paths.base_path
+        self.hf_host = "https://huggingface.co"
 
     def format_file_size(self, size_bytes: int) -> str:
         """Format file size in human-readable units"""
@@ -52,7 +53,8 @@ class HuggingFaceUtils:
             return {
                 "repo_id": data["repo_id"],
                 "filename": data["filename"],
-                "is_file_url": True
+                "is_file_url": True,
+                "hf_url": hf_url
             }
         
         # Pattern 2: Repository URLs (with or without /tree/main or other suffixes)
@@ -62,13 +64,19 @@ class HuggingFaceUtils:
             return {
                 "repo_id": data["repo_id"],
                 "filename": None,
-                "is_file_url": False
+                "is_file_url": False,
+                "hf_url": self.hf_host in hf_url and hf_url or f"{self.hf_host}/{hf_url}"
             }
         
         # Pattern 3: Just a repo_id like "username/repo_name"
         if re.match(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", hf_url):
-            return {"repo_id": hf_url, "filename": None, "is_file_url": False}
-            
+            return {
+                "repo_id": hf_url, 
+                "filename": None, 
+                "is_file_url": False, 
+                "hf_url": f"{self.hf_host}/{hf_url}"
+            }
+
         raise ValueError(f"Invalid Hugging Face URL or repo_id: {hf_url}")
 
     def convert_size_to_bytes(self, value: float, unit: str) -> int:

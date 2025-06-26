@@ -877,7 +877,7 @@ export class FileSystemManager {
         
         try {
             UIComponents.showUploadMessage(this.uploadModal, 'Cancelling download...', false);
-            
+
             const response = await api.fetchApi('/filesystem/cancel_download', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1203,8 +1203,6 @@ export class FileSystemManager {
             
             if (result.success) {
                 this.downloadProgress = result.progress;
-
-                console.warn('Global model download progress:', this.downloadProgress);
                 
                 // GUARD: Only update UI if the modal is active
                 if (this.modal) {

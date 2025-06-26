@@ -22,8 +22,8 @@ class ProgressTracker:
         """Mark session as completed"""
         if session_id:
             hf_progress_store[session_id] = {
-                "status": "completed", 
-                "message": message, 
+                "status": "completed",
+                "message": message,
                 "percentage": 100
             }
             print(f"✅ Completed - Session: {session_id}, Message: {message}")
@@ -33,8 +33,8 @@ class ProgressTracker:
         """Mark session as error"""
         if session_id:
             hf_progress_store[session_id] = {
-                "status": "error", 
-                "message": message, 
+                "status": "error",
+                "message": message,
                 "percentage": 0
             }
             print(f"❌ Error - Session: {session_id}, Message: {message}")
