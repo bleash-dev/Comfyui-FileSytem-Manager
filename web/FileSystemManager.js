@@ -1048,7 +1048,7 @@ export class FileSystemManager {
         this.stopGlobalModelsMonitoring(); // Clear existing before starting new
         this.globalModelsMonitoringInterval = setInterval(() => {
             this.updateGlobalModelDownloadProgress();
-        }, 1000);
+        }, 3000);
     }
 
     stopGlobalModelsMonitoring() {
@@ -1196,7 +1196,7 @@ export class FileSystemManager {
         } catch (error) { console.error('Error toggling auto-download:', error); }
     }
 
-    async updateGlobalModelDownloadProgress() { // This is one of the duplicates, the one called by the interval
+    async updateGlobalModelDownloadProgress() {
         try {
             const response = await api.fetchApi('/filesystem/global_model_download_progress');
             const result = await response.json();
@@ -1208,64 +1208,129 @@ export class FileSystemManager {
                 if (this.modal) {
                     Object.entries(result.progress).forEach(([modelPath, progressData]) => {
                         UIComponents.showGlobalModelProgress(this.modal, modelPath, progressData);
+                        
+                        // Clean up completed or failed downloads from cache after some time
+                        if (['downloaded', 'failed', 'cancelled'].includes(progressData.status)) {
+                            setTimeout(() => {
+                                if (this.downloadProgress[modelPath] && 
+                                    this.downloadProgress[modelPath].status === progressData.status) {
+                                    // Clear from progress tracking after display
+                                    this.clearGlobalModelProgress(modelPath);
+                                }
+                            }, 3000); // Reduced cleanup time to 3 seconds for faster UI updates
+                        }
                     });
                 }
             }
         } catch (error) {
+            // Silently handle errors to avoid spam
         }
     }
 
+    async clearGlobalModelProgress(modelPath) {
+        try {
+            const response = await api.fetchApi('/filesystem/clear_global_model_progress', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model_path: modelPath })
+            });
+            const result = await response.json();
+            
+            if (result.success) {
+                // Remove from local cache
+                if (this.downloadProgress[modelPath]) {
+                    delete this.downloadProgress[modelPath];
+                }
+                console.log(`🧹 Cleared progress for: ${modelPath}`);
+            }
+        } catch (error) {
+            console.error('Error clearing global model progress:', error);
+        }
+    }
 
     async handleGlobalModelDownload(item) {
-        if (!this.modal) return; // Guard if modal is not active
+        if (!this.modal) return false; // Guard if modal is not active
         if (item.global_exists && !item.local_exists && item.downloadable) {
             const modelPath = item.global_model_path || item.path;
             
-            if (this.downloadProgress[modelPath] && this.downloadProgress[modelPath].status === 'downloading') {
+            // Check if there's an active download (but allow retries for cancelled/failed)
+            const currentProgress = this.downloadProgress[modelPath];
+            if (currentProgress && currentProgress.status === 'downloading') {
                 UIComponents.showMessage(this.modal, `Already downloading ${modelPath}`, false);
-                return;
+                return false;
             }
             
             try {
                 UIComponents.showMessage(this.modal, `Starting download for ${modelPath}...`, false);
+                
+                // Show initial progress (this will replace any existing retry button)
                 UIComponents.showGlobalModelProgress(this.modal, modelPath, {
-                    status: 'downloading', progress: 0, downloaded_size: 0, total_size: item.size || 0
+                    status: 'downloading', 
+                    progress: 0, 
+                    downloaded_size: 0, 
+                    total_size: item.size || 0,
+                    message: '🚀 Initiating download...'
                 });
+                
                 const response = await api.fetchApi('/filesystem/download_global_model', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model_path: modelPath })
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify({ model_path: modelPath })
                 });
                 const result = await response.json();
                 
                 if (result.success) {
-                    // UIComponents.showGlobalModelProgress(this.modal, modelPath, { // Initial progress already shown
-                    //     status: 'downloading', progress: 0, downloaded_size: 0, total_size: item.size || 0
-                    // });
+                    UIComponents.showMessage(this.modal, `Download started for ${modelPath}`, false);
+                    return true;
                 } else {
                     UIComponents.showMessage(this.modal, `Error: ${result.error || 'Failed to start download'}`, true);
+                    // Update progress to show error state with retry option
+                    UIComponents.showGlobalModelProgress(this.modal, modelPath, {
+                        status: 'failed',
+                        progress: 0,
+                        message: `❌ ${result.error || 'Failed to start download'} - Click retry to try again`
+                    });
+                    return false;
                 }
-            } catch (error) { UIComponents.showMessage(this.modal, `Error: ${error.message}`, true); }
+            } catch (error) { 
+                UIComponents.showMessage(this.modal, `Error: ${error.message}`, true);
+                // Update progress to show error state with retry option
+                UIComponents.showGlobalModelProgress(this.modal, modelPath, {
+                    status: 'failed',
+                    progress: 0,
+                    message: `❌ ${error.message} - Click retry to try again`
+                });
+                return false;
+            }
         }
+        return false;
     }
 
     async cancelGlobalModelDownload(modelPath) {
         if (!this.modal) return; // Guard
         try {
             const response = await api.fetchApi('/filesystem/cancel_global_model_download', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model_path: modelPath })
+                method: 'POST', 
+                headers: { 'Content-Type': 'application/json' }, 
+                body: JSON.stringify({ model_path: modelPath })
             });
             const result = await response.json();
             
             if (result.success) {
                 UIComponents.showMessage(this.modal, `Cancelled download for ${modelPath}`, false);
-                UIComponents.hideGlobalModelProgress(this.modal, modelPath);
-            } else { UIComponents.showMessage(this.modal, `Error: ${result.error || 'Failed to cancel'}`, true); }
-        } catch (error) { UIComponents.showMessage(this.modal, `Error: ${error.message}`, true); }
+                // Don't hide progress immediately - let the backend update show the cancelled state with retry button
+            } else { 
+                UIComponents.showMessage(this.modal, `Error: ${result.error || 'Failed to cancel'}`, true); 
+            }
+        } catch (error) { 
+            UIComponents.showMessage(this.modal, `Error: ${error.message}`, true); 
+        }
     }
 
     // REMOVE THE DUPLICATE updateGlobalModelDownloadProgress here if it existed.
     // The one called by the interval is the one that needs the `if (this.modal)` guard.
 
-    // This one was a duplicate, let's remove it. Keep the one that's called by the interval.
+    // This one was a duplicate, let's remove it. Keep the one that's called by the interval
     /*
     async updateGlobalModelDownloadProgress() { // THIS IS A DUPLICATE, REMOVE
         try {
@@ -1310,7 +1375,7 @@ export class FileSystemManager {
             } catch (error) {
                 clearInterval(updateInterval);
             }
-        }, 1000);
+        }, 3000);
     }
 
     setupMissingModelsHandler() {
@@ -1348,6 +1413,7 @@ export class FileSystemManager {
 
     addMissingModelsStyles() {
         if (document.querySelector('#missing-models-custom-styles')) return;
+        console.log('Adding custom styles for missing models dialog');
         const style = document.createElement('style');
         style.id = 'missing-models-custom-styles';
         style.textContent = `/* ... Your CSS from before ... */

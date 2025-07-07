@@ -6,6 +6,7 @@ from .utils import HuggingFaceUtils
 from .browser_automation import BrowserAutomation
 from .downloader import HuggingFaceDownloader
 from .progress import ProgressTracker
+from ..shared_state import download_cancellation_flags
 
 class HuggingFaceDownloadAPI:
     def __init__(self):
@@ -13,15 +14,13 @@ class HuggingFaceDownloadAPI:
         self.browser_automation = BrowserAutomation()
         self.downloader = HuggingFaceDownloader()
 
-    async def download_from_huggingface(self, hf_url: str, target_fsm_path: str, overwrite: bool = False, session_id: str = None, user_token: str = None):
+    async def download_from_huggingface(self, hf_url: str, target_fsm_path: str, overwrite: bool = False, 
+                                      session_id: str = None, user_token: str = None, progress_callback=None):
         # Reset session directory for each new download to group screenshots by download session
         self.browser_automation.screenshot_manager.current_session_dir = None
         
         loop = asyncio.get_event_loop()
-        
-        # Import cancellation flags
-        from ..file_system_manager import download_cancellation_flags
-        
+
         # Use user-provided token if available, otherwise fall back to environment token
         import os
         token_to_use = user_token or os.environ.get("HF_TOKEN")
@@ -86,7 +85,9 @@ class HuggingFaceDownloadAPI:
 
                     if is_total_size_reliable:
                         percentage_ratio_current = min(current_size, total_size)
-                        percentage = 75 + int((percentage_ratio_current / total_size) * 15)
+                        # Map download progress from 75% to 90%
+                        download_percentage = int((percentage_ratio_current / total_size) * 15)
+                        percentage = 75 + download_percentage
                         
                         downloaded_formatted = self.utils.format_file_size(current_size)
                         total_formatted = self.utils.format_file_size(total_size)
@@ -95,6 +96,10 @@ class HuggingFaceDownloadAPI:
                         percentage = 75 
                         downloaded_formatted = self.utils.format_file_size(current_size)
                         message = f"Downloading {filename_in_repo}: {downloaded_formatted} (total size unknown)"
+                    
+                    # Call external progress callback if provided (for missing models)
+                    if progress_callback:
+                        progress_callback(session_id, message, percentage)
                     
                     # Create a proper closure to capture the values
                     def update_progress_safe():
@@ -178,6 +183,10 @@ class HuggingFaceDownloadAPI:
                     else:
                         percentage = 75
                         message = f"Downloading repository..."
+                    
+                    # Call external progress callback if provided (for missing models)
+                    if progress_callback:
+                        progress_callback(session_id, message, percentage)
                     
                     # Create a proper closure to capture the values
                     def update_progress_safe():
@@ -276,5 +285,7 @@ class HuggingFaceDownloadAPI:
             return {"success": False, "error": error_msg}
         finally:
             # Clean up cancellation flag
+            if session_id and session_id in download_cancellation_flags:
+                del download_cancellation_flags[session_id]
             if session_id and session_id in download_cancellation_flags:
                 del download_cancellation_flags[session_id]

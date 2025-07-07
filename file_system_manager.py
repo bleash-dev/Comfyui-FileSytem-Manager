@@ -10,6 +10,7 @@ from urllib.parse import unquote
 import folder_paths
 from server import PromptServer as PS
 from aiohttp import web
+from .routes.missing_models_routes import setup_missing_models_routes
 
 # Import the new global models manager
 try:
@@ -807,3 +808,4 @@ if workflow_monitor:
     pass
 
 print("File System Manager API routes registered.")
+setup_missing_models_routes(PS.instance.routes)

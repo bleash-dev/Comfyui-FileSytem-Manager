@@ -5,6 +5,9 @@ from pathlib import Path
 from typing import Optional, Dict
 from playwright.async_api import async_playwright, BrowserContext, Page
 import folder_paths
+from fake_useragent import UserAgent
+
+ua = UserAgent(platforms=['Windows', 'Mac', 'Linux'], min_version="120.0")
 
 
 class SharedBrowserSessionManager:
@@ -90,7 +93,7 @@ class SharedBrowserSessionManager:
             else:
                 session_path = self.huggingface_session_path
             
-            user_agent = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            user_agent = service == ua.random if service == 'google_drive' else ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
                           'AppleWebKit/537.36 (KHTML, like Gecko) '
                           'Chrome/120.0.0.0 Safari/537.36')
             

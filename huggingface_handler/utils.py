@@ -47,7 +47,7 @@ class HuggingFaceUtils:
         Returns: {'repo_id': str, 'filename': str or None, 'is_file_url': bool}
         """
         # Pattern 1: File URLs (blob/resolve with filename)
-        file_match = re.match(r"^(?:https?://huggingface\.co/)?(?P<repo_id>[^/]+/[^/]+)/(?:blob|resolve)/[^/]+/(?P<filename>.+)$", hf_url)
+        file_match = re.match(r"^(?:https?://huggingface\.co/)?(?P<repo_id>[^/]+/[^/]+)/(?:blob|resolve|blame)/[^/]+/(?P<filename>.+)$", hf_url)
         if file_match:
             data = file_match.groupdict()
             return {

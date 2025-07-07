@@ -6,6 +6,15 @@ import time
 from pathlib import Path
 import folder_paths
 
+# Add boto3 import
+try:
+    import boto3
+    from botocore.exceptions import ClientError, NoCredentialsError
+    BOTO3_AVAILABLE = True
+except ImportError:
+    BOTO3_AVAILABLE = False
+    print("boto3 not available, falling back to AWS CLI")
+
 # Progress tracking for global model downloads
 global_models_progress_store = {}
 
@@ -15,7 +24,22 @@ class GlobalModelsManager:
         self.models_dir = self.comfyui_base / "models"
         self.bucket = os.environ.get('AWS_BUCKET_NAME')
         self.s3_models_base = f"s3://{self.bucket}/pod_sessions/global_shared/models/" if self.bucket else None
-        self.aws_configured = self._check_aws_configuration()
+        
+        # Initialize S3 client if boto3 is available
+        self.s3_client = None
+        if BOTO3_AVAILABLE and self.bucket:
+            try:
+                self.s3_client = boto3.client('s3')
+                # Test credentials by listing bucket
+                self.s3_client.head_bucket(Bucket=self.bucket)
+                self.aws_configured = True
+                print("✅ S3 client initialized successfully")
+            except (ClientError, NoCredentialsError) as e:
+                print(f"❌ S3 client initialization failed: {e}")
+                self.s3_client = None
+                self.aws_configured = self._check_aws_configuration()
+        else:
+            self.aws_configured = self._check_aws_configuration()
         
         # Add caching
         self.cache_file = self.comfyui_base / '.global_models_cache.json'
@@ -23,6 +47,9 @@ class GlobalModelsManager:
         self._structure_cache = None
         self._cache_timestamp = 0
         
+        # Track active downloads for cancellation
+        self.active_downloads = {}
+
     def _check_aws_configuration(self):
         """Check if AWS CLI is configured"""
         try:
@@ -33,7 +60,19 @@ class GlobalModelsManager:
             return False
 
     def _get_s3_model_size(self, s3_path):
-        """Get model size from S3 using aws s3api head-object"""
+        """Get model size from S3 using boto3 or AWS CLI"""
+        if self.s3_client and s3_path.startswith("s3://"):
+            try:
+                parts = s3_path.replace("s3://", "").split('/', 1)
+                if len(parts) >= 2:
+                    bucket = parts[0]
+                    key = parts[1]
+                    response = self.s3_client.head_object(Bucket=bucket, Key=key)
+                    return response.get('ContentLength')
+            except Exception as e:
+                print(f"Error getting S3 model size with boto3 for {s3_path}: {e}")
+        
+        # Fallback to AWS CLI
         if not self.aws_configured:
             return None
         try:
@@ -67,22 +106,313 @@ class GlobalModelsManager:
         except Exception as e:
             return False, str(e)
 
+    def _create_progress_callback(self, model_path, total_size):
+        """Create a progress callback function for boto3 download"""
+        downloaded = 0
+        last_update = 0
+        
+        def progress_callback(chunk_size):
+            nonlocal downloaded, last_update
+            downloaded += chunk_size
+            current_time = time.time()
+            
+            # Calculate progress percentage
+            if total_size > 0:
+                progress = min((downloaded / total_size) * 100, 100)
+            else:
+                # Fallback estimation
+                progress = min((downloaded / (1024 * 1024 * 100)) * 100, 95)
+            
+            # Update progress store with formatted message
+            if current_time - last_update >= 0.5:  # Update every 500ms
+                if model_path in global_models_progress_store:
+                    store_entry = global_models_progress_store[model_path]
+                    if store_entry.get("status") == "downloading":
+                        # Format the complete message on the backend
+                        downloaded_formatted = self._format_file_size(downloaded)
+                        total_formatted = self._format_file_size(total_size) if total_size > 0 else "Unknown"
+                        
+                        if total_size > 0:
+                            message = f"📥 {downloaded_formatted} / {total_formatted} ({int(progress)}%)"
+                        else:
+                            message = f"📥 {downloaded_formatted} downloaded ({int(progress)}%)"
+                        
+                        store_entry["progress"] = progress
+                        store_entry["downloaded_size"] = downloaded
+                        store_entry["total_size"] = total_size
+                        store_entry["message"] = message  # Add formatted message
+                        last_update = current_time
+                        
+                        # Log progress for debugging (every 10% to reduce spam)
+                        if int(progress) % 10 == 0 and progress > 0:
+                            print(f"📥 Download progress for {model_path}: {progress:.1f}% ({downloaded}/{total_size} bytes)")
+        
+        return progress_callback
+
+    def _format_file_size(self, bytes_size):
+        """Format file size in human readable format"""
+        if bytes_size == 0:
+            return '0 B'
+        
+        k = 1024
+        sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+        i = int(len(sizes) - 1) if bytes_size >= k ** (len(sizes) - 1) else int(
+            __import__('math').log(bytes_size) / __import__('math').log(k)
+        )
+        
+        return f"{bytes_size / (k ** i):.1f} {sizes[i]}"
+
+    async def download_model(self, model_path):
+        """Download a specific model from global storage with real-time progress"""
+        if not self.aws_configured or not self.s3_models_base:
+            global_models_progress_store[model_path] = {
+                "progress": 0, 
+                "status": "failed", 
+                "message": "❌ AWS not configured"
+            }
+            return False
+        
+        try:
+            # Clean up any existing progress/cancellation state for retry
+            if model_path in self.active_downloads:
+                del self.active_downloads[model_path]
+            
+            # Clear any existing progress entry to start fresh
+            if model_path in global_models_progress_store:
+                # Keep only essential info if restarting
+                old_entry = global_models_progress_store[model_path]
+                if old_entry.get("status") in ["cancelled", "failed"]:
+                    print(f"🔄 Retrying download for {model_path}")
+            
+            path_parts = model_path.split('/')
+            if len(path_parts) < 2:
+                global_models_progress_store[model_path] = {
+                    "progress": 0, 
+                    "status": "failed", 
+                    "message": "❌ Invalid model path"
+                }
+                return False
+            
+            category = path_parts[0]
+            filename = '/'.join(path_parts[1:])
+            
+            s3_full_path = f"{self.s3_models_base}{category}/{filename}"
+            local_path = self.models_dir / category / filename
+            
+            # Clean up any partial download files for retry
+            if local_path.exists():
+                try:
+                    local_path.unlink()
+                    print(f"🧹 Cleaned up partial download: {local_path}")
+                except OSError as e:
+                    print(f"Warning: Could not clean up partial download {local_path}: {e}")
+            
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Get file size from S3 for progress tracking
+            total_size = self._get_s3_model_size(s3_full_path)
+            if not total_size:
+                print(f"Warning: Could not determine file size for {model_path}, progress may be inaccurate")
+                total_size = 0
+            
+            # Initialize progress tracking with formatted message
+            global_models_progress_store[model_path] = {
+                "progress": 0, 
+                "status": "downloading",
+                "total_size": total_size,
+                "downloaded_size": 0,
+                "message": "🚀 Starting download..."
+            }
+
+            # Mark this download as active for cancellation tracking
+            self.active_downloads[model_path] = {"cancelled": False}
+
+            print(f"🚀 Starting download: {model_path} ({total_size} bytes)")
+
+            # Use boto3 if available for better progress tracking
+            if self.s3_client and s3_full_path.startswith("s3://"):
+                success = await self._download_with_boto3(model_path, s3_full_path, local_path, total_size)
+            else:
+                # Fallback to AWS CLI with monitoring
+                success = await self._download_with_aws_cli(model_path, s3_full_path, local_path, total_size)
+
+            # Check for final cancellation
+            if self.active_downloads.get(model_path, {}).get("cancelled"):
+                if local_path.exists():
+                    try:
+                        local_path.unlink()
+                        print(f"🗑️ Removed cancelled download: {local_path}")
+                    except OSError as e:
+                        print(f"Error removing cancelled download {local_path}: {e}")
+                
+                global_models_progress_store[model_path] = {
+                    "progress": 0,
+                    "status": "cancelled",
+                    "total_size": total_size,
+                    "downloaded_size": 0
+                }
+                return False
+
+            if success:
+                # Get final file size
+                final_size = 0
+                if local_path.exists():
+                    final_size = local_path.stat().st_size
+                    print(f"✅ Download complete: {model_path} ({final_size} bytes)")
+                
+                # Mark as completed with success message
+                global_models_progress_store[model_path] = {
+                    "progress": 100, 
+                    "status": "downloaded",
+                    "total_size": total_size or final_size,
+                    "downloaded_size": final_size,
+                    "message": "✅ Download complete!"
+                }
+                return True
+            else:
+                print(f"❌ Download failed: {model_path}")
+                global_models_progress_store[model_path] = {
+                    "progress": 0, 
+                    "status": "failed", 
+                    "total_size": total_size,
+                    "downloaded_size": 0,
+                    "message": "❌ Download failed"
+                }
+                
+                # Clean up failed download
+                if local_path.exists():
+                    try:
+                        local_path.unlink()
+                        print(f"🗑️ Removed failed download: {local_path}")
+                    except OSError as e:
+                        print(f"Error cleaning up failed download {local_path}: {e}")
+                return False
+                
+        except Exception as e:
+            print(f"💥 Error downloading model {model_path}: {e}")
+            global_models_progress_store[model_path] = {
+                "progress": 0, 
+                "status": "failed", 
+                "total_size": 0,
+                "downloaded_size": 0,
+                "message": f"❌ Error: {str(e)} - Click retry to try again"
+            }
+            return False
+        finally:
+            # Clean up active download tracking
+            if model_path in self.active_downloads:
+                del self.active_downloads[model_path]
+
+    async def _download_with_boto3(self, model_path, s3_full_path, local_path, total_size):
+        """Download using boto3 with real-time progress callbacks"""
+        try:
+            # Parse S3 path
+            parts = s3_full_path.replace("s3://", "").split('/', 1)
+            if len(parts) < 2:
+                return False
+            
+            bucket = parts[0]
+            key = parts[1]
+            
+            # Create progress callback
+            progress_callback = self._create_progress_callback(model_path, total_size)
+            
+            # Create async wrapper for download
+            def do_download():
+                try:
+                    with open(local_path, 'wb') as f:
+                        self.s3_client.download_fileobj(
+                            bucket, key, f, 
+                            Callback=progress_callback
+                        )
+                    return True
+                except Exception as e:
+                    print(f"Boto3 download error: {e}")
+                    return False
+            
+            # Run download in executor with cancellation support
+            loop = asyncio.get_event_loop()
+            download_task = loop.run_in_executor(None, do_download)
+            
+            # Monitor for cancellation
+            while not download_task.done():
+                await asyncio.sleep(0.1)
+                
+                # Check for cancellation
+                if self.active_downloads.get(model_path, {}).get("cancelled"):
+                    print(f"🚫 Cancelling boto3 download for {model_path}")
+                    download_task.cancel()
+                    return False
+            
+            # Get result
+            try:
+                return await download_task
+            except asyncio.CancelledError:
+                return False
+                
+        except Exception as e:
+            print(f"Error in boto3 download: {e}")
+            return False
+
+    async def _download_with_aws_cli(self, model_path, s3_full_path, local_path, total_size):
+        """Fallback download using AWS CLI with file size monitoring"""
+        try:
+            command = ['aws', 's3', 'cp', s3_full_path, str(local_path)]
+            print(f"📥 Using AWS CLI: {' '.join(command)}")
+
+            # Create async wrapper for AWS CLI
+            async def do_download():
+                loop = asyncio.get_event_loop()
+                try:
+                    return await loop.run_in_executor(None, lambda: self._run_aws_command(command, timeout=600))
+                except Exception as e:
+                    print(f"AWS CLI download error: {e}")
+                    return False, str(e)
+
+            # Start download and monitoring
+            download_task = asyncio.create_task(do_download())
+            monitor_task = asyncio.create_task(self._monitor_progress(model_path, local_path, total_size))
+
+            # Wait for download with cancellation support
+            while not download_task.done():
+                await asyncio.sleep(0.5)
+                
+                # Check for cancellation
+                if self.active_downloads.get(model_path, {}).get("cancelled"):
+                    print(f"🚫 Cancelling AWS CLI download for {model_path}")
+                    download_task.cancel()
+                    monitor_task.cancel()
+                    return False
+            
+            # Stop monitoring
+            monitor_task.cancel()
+            
+            # Get result
+            try:
+                success, output = await download_task
+                return success
+            except asyncio.CancelledError:
+                return False
+                
+        except Exception as e:
+            print(f"Error in AWS CLI download: {e}")
+            return False
+
     async def _monitor_progress(self, model_path, local_path, total_size):
-        """Monitor download progress of a file by watching file size changes."""
+        """Monitor download progress by watching file size changes (fallback for AWS CLI)"""
         if not total_size or total_size == 0:
-            # If we don't know the total size, we'll estimate based on file growth
             total_size = 1024 * 1024 * 100  # Assume 100MB as default
         
-        store_entry = global_models_progress_store.get(model_path)
-        if not store_entry:
-            return
-
         last_size = 0
         stalled_count = 0
-        max_stalled_iterations = 30  # 30 seconds of no progress before considering stalled
+        max_stalled_iterations = 60
         
-        while store_entry.get("status") == "downloading":
+        while True:
             try:
+                # Check for cancellation
+                if self.active_downloads.get(model_path, {}).get("cancelled"):
+                    break
+                
                 current_size = 0
                 if local_path.exists():
                     current_size = local_path.stat().st_size
@@ -91,44 +421,66 @@ class GlobalModelsManager:
                 if total_size > 0:
                     progress = min((current_size / total_size) * 100, 100)
                 else:
-                    # Fallback: estimate progress based on file size growth
-                    progress = min((current_size / (1024 * 1024 * 100)) * 100, 95)  # Cap at 95% for unknown size
+                    progress = min((current_size / (1024 * 1024 * 100)) * 100, 95)
                 
-                # Update progress store
-                store_entry["progress"] = progress
-                store_entry["downloaded_size"] = current_size
-                store_entry["total_size"] = total_size
+                # Update progress store with formatted message
+                if model_path in global_models_progress_store:
+                    store_entry = global_models_progress_store[model_path]
+                    if store_entry.get("status") == "downloading":
+                        # Format the complete message on the backend
+                        downloaded_formatted = self._format_file_size(current_size)
+                        total_formatted = self._format_file_size(total_size) if total_size > 0 else "Unknown"
+                        
+                        if total_size > 0:
+                            message = f"📥 {downloaded_formatted} / {total_formatted} ({int(progress)}%)"
+                        else:
+                            message = f"📥 {downloaded_formatted} downloaded ({int(progress)}%)"
+                        
+                        store_entry["progress"] = progress
+                        store_entry["downloaded_size"] = current_size
+                        store_entry["total_size"] = total_size
+                        store_entry["message"] = message
                 
                 # Check if download is stalled
                 if current_size == last_size:
                     stalled_count += 1
                     if stalled_count >= max_stalled_iterations:
-                        print(f"Download appears stalled for {model_path}. No progress for {max_stalled_iterations} seconds.")
-                        # Don't break here, let the main download process handle timeouts
+                        print(f"⚠️ Download stalled for {model_path}")
+                        # Update message to show stalled status
+                        if model_path in global_models_progress_store:
+                            global_models_progress_store[model_path]["message"] = "⚠️ Download stalled..."
                 else:
-                    stalled_count = 0  # Reset stall counter
+                    stalled_count = 0
                 
                 last_size = current_size
                 
-                # If we've reached 100% or the expected file size, we're likely done
+                # If we've reached completion
                 if progress >= 99.9 or (total_size > 0 and current_size >= total_size):
-                    print(f"Download monitoring complete for {model_path}: {current_size}/{total_size} bytes")
+                    if model_path in global_models_progress_store:
+                        global_models_progress_store[model_path]["message"] = "🔄 Finishing download..."
                     break
                     
-                # Log progress every 10% for debugging
-                if int(progress) % 10 == 0 and progress > 0:
-                    print(f"Download progress for {model_path}: {progress:.1f}% ({current_size}/{total_size} bytes)")
-                
             except Exception as e:
                 print(f"Error monitoring progress for {model_path}: {e}")
+                if model_path in global_models_progress_store:
+                    global_models_progress_store[model_path]["message"] = f"❌ Monitor error: {str(e)}"
                 break
             
-            # Check for cancellation
-            if store_entry.get("status") == "cancelled":
-                print(f"Download monitoring cancelled for {model_path}")
-                break
-                
-            await asyncio.sleep(1)  # Check every second
+            await asyncio.sleep(0.5)  # Check every 500ms
+
+    async def cancel_download(self, model_path):
+        """Cancel an active download"""
+        if model_path in self.active_downloads:
+            print(f"🚫 Cancelling download for {model_path}")
+            self.active_downloads[model_path]["cancelled"] = True
+            
+            # Update progress store with cancellation message
+            if model_path in global_models_progress_store:
+                global_models_progress_store[model_path]["status"] = "cancelled"
+                global_models_progress_store[model_path]["message"] = "🚫 Download cancelled - Click retry to restart"
+            
+            return True
+        return False
 
     async def get_global_models_structure(self, force_refresh=False):
         """Get the structure of available global models from S3 with caching"""
@@ -227,155 +579,6 @@ class GlobalModelsManager:
         except Exception as e:
             print(f"Error getting global models structure: {e}")
             return self._structure_cache or {}
-
-    async def download_model(self, model_path):
-        """Download a specific model from global storage"""
-        if not self.aws_configured or not self.s3_models_base:
-            global_models_progress_store[model_path] = {"progress": 0, "status": "failed", "error": "AWS not configured"}
-            return False
-        
-        try:
-            path_parts = model_path.split('/')
-            if len(path_parts) < 2:
-                global_models_progress_store[model_path] = {"progress": 0, "status": "failed", "error": "Invalid model path"}
-                return False
-            
-            category = path_parts[0]
-            filename = '/'.join(path_parts[1:])
-            
-            s3_full_path = f"{self.s3_models_base}{category}/{filename}"
-            local_path = self.models_dir / category / filename
-            
-            local_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Get file size from S3 for progress tracking
-            total_size = self._get_s3_model_size(s3_full_path)
-            if not total_size:
-                print(f"Warning: Could not determine file size for {model_path}, progress may be inaccurate")
-                total_size = 0
-            
-            # Initialize progress tracking
-            global_models_progress_store[model_path] = {
-                "progress": 0, 
-                "status": "downloading",
-                "total_size": total_size,
-                "downloaded_size": 0
-            }
-
-            command = ['aws', 's3', 'cp', s3_full_path, str(local_path)]
-            print(f"Starting download: {' '.join(command)}")
-
-            # Create a proper async wrapper for the synchronous download
-            async def do_download():
-                loop = asyncio.get_event_loop()
-                try:
-                    return await loop.run_in_executor(None, lambda: self._run_aws_command(command, timeout=600))
-                except Exception as e:
-                    print(f"Download execution error: {e}")
-                    return False, str(e)
-
-            # Start the download task
-            download_task = asyncio.create_task(do_download())
-            
-            # Start progress monitoring immediately
-            progress_task = asyncio.create_task(self._monitor_progress(model_path, local_path, total_size))
-
-            # Monitor both download completion and cancellation
-            while not download_task.done():
-                await asyncio.sleep(0.5)
-                
-                # Check for cancellation
-                current_entry = global_models_progress_store.get(model_path, {})
-                if current_entry.get("status") == "cancelled":
-                    print(f"Cancelling download for {model_path}")
-                    
-                    # Cancel both tasks
-                    download_task.cancel()
-                    progress_task.cancel()
-                    
-                    # Clean up any partially downloaded file
-                    if local_path.exists():
-                        try:
-                            local_path.unlink()
-                            print(f"Removed partially downloaded file after cancellation: {local_path}")
-                        except OSError as e:
-                            print(f"Error removing partial download {local_path}: {e}")
-                    return False
-            
-            # Get download result
-            try:
-                success, output = await download_task
-            except asyncio.CancelledError:
-                print(f"Download task cancelled for {model_path}")
-                return False
-            
-            # Final cancellation check
-            current_entry = global_models_progress_store.get(model_path, {})
-            if current_entry.get("status") == "cancelled":
-                if local_path.exists():
-                    try:
-                        local_path.unlink()
-                        print(f"Removed downloaded file after cancellation: {local_path}")
-                    except OSError as e:
-                        print(f"Error removing download {local_path}: {e}")
-                return False
-            
-            # Update status to finishing and stop progress monitoring
-            if model_path in global_models_progress_store:
-                global_models_progress_store[model_path]["status"] = "finishing"
-            
-            # Wait for progress monitoring to complete
-            try:
-                await progress_task
-            except asyncio.CancelledError:
-                pass  # Progress task was cancelled, that's fine
-
-            if success:
-                print(f"Successfully downloaded {model_path} to {local_path}")
-                
-                # Get final file size
-                final_size = 0
-                if local_path.exists():
-                    final_size = local_path.stat().st_size
-                    print(f"Final file size: {final_size} bytes")
-                
-                # Mark as completed
-                global_models_progress_store[model_path] = {
-                    "progress": 100, 
-                    "status": "downloaded",
-                    "total_size": total_size or final_size,
-                    "downloaded_size": final_size
-                }
-                return True
-            else:
-                print(f"Failed to download {model_path}: {output}")
-                global_models_progress_store[model_path] = {
-                    "progress": 0, 
-                    "status": "failed", 
-                    "error": output,
-                    "total_size": total_size,
-                    "downloaded_size": 0
-                }
-                
-                # Clean up failed download
-                if local_path.exists():
-                    try:
-                        local_path.unlink()
-                        print(f"Removed failed download file: {local_path}")
-                    except OSError as e:
-                        print(f"Error cleaning up failed download {local_path}: {e}")
-                return False
-                
-        except Exception as e:
-            print(f"Error downloading model {model_path}: {e}")
-            global_models_progress_store[model_path] = {
-                "progress": 0, 
-                "status": "failed", 
-                "error": str(e),
-                "total_size": 0,
-                "downloaded_size": 0
-            }
-            return False
 
     async def upload_model(self, local_path):
         """Upload a model to global storage"""

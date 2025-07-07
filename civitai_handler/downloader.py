@@ -5,6 +5,7 @@ import aiofiles
 from pathlib import Path
 from .utils import CivitAIUtils
 from .progress import ProgressTracker
+from ..shared_state import download_cancellation_flags
 
 class CivitAIDownloader:
     def __init__(self):
@@ -81,10 +82,7 @@ class CivitAIDownloader:
 
     async def download_with_progress(self, download_url: str, target_path: str, filename: str, 
                                    session_id: str = None, token: str = None, progress_callback=None):
-        """Download file with real-time progress tracking"""
-        # Import cancellation flags
-        from ..file_system_manager import download_cancellation_flags
-        
+        """Download file with real-time progress tracking and optional progress callback"""
         # Add token as query parameter to download URL if provided
         final_download_url = download_url
         if token:
@@ -118,6 +116,10 @@ class CivitAIDownloader:
                     75
                 )
                 
+                # Call external progress callback if provided
+                if progress_callback:
+                    progress_callback(session_id, f"Starting download of {filename}...", 75)
+                
                 async with aiofiles.open(target_path, 'wb') as file:
                     chunk_size = 1024 * 1024  # 1MB chunks for better performance
                     
@@ -147,18 +149,18 @@ class CivitAIDownloader:
                         
                         ProgressTracker.update_progress(session_id, message, percentage)
                         
+                        # Call external progress callback if provided
                         if progress_callback:
-                            progress_callback(downloaded, total_size)
+                            progress_callback(session_id, message, percentage)
                 
                 return downloaded
 
     async def download_model_async(self, model_id: str, version_id: str = None, 
                                  target_fsm_path: str = None, filename: str = None,
-                                 token: str = None, session_id: str = None, direct_download_url: str = None):
-        """Download a model from CivitAI with progress tracking"""
-        # Import cancellation flags
-        from ..file_system_manager import download_cancellation_flags
-        
+                                 token: str = None, session_id: str = None, direct_download_url: str = None,
+                                 progress_callback=None):
+        """Download a model from CivitAI with progress tracking and optional progress callback"""
+
         try:
             # Handle direct download URLs
             if direct_download_url:
@@ -221,13 +223,18 @@ class CivitAIDownloader:
                         30
                     )
                     
+                    # Call external progress callback if provided
+                    if progress_callback:
+                        progress_callback(session_id, f"Starting direct download...", 30)
+                    
                     # Download with progress using the direct URL
                     downloaded_size = await self.download_with_progress(
                         download_url=direct_download_url,
                         target_path=temp_path,
                         filename=final_filename,
                         session_id=session_id,
-                        token=token
+                        token=token,
+                        progress_callback=progress_callback
                     )
                     
                     # Check for cancellation after download
@@ -273,6 +280,10 @@ class CivitAIDownloader:
                 return {"success": False, "error": "Download cancelled by user"}
                 
             ProgressTracker.update_progress(session_id, "Fetching model information...", 5)
+            
+            # Call external progress callback if provided
+            if progress_callback:
+                progress_callback(session_id, "Fetching model information...", 5)
             
             # Get model information
             model_info = await self.get_model_info(model_id, token)
@@ -390,13 +401,18 @@ class CivitAIDownloader:
                     30
                 )
                 
+                # Call external progress callback if provided
+                if progress_callback:
+                    progress_callback(session_id, f"Starting download from CivitAI...", 30)
+                
                 # Download with progress
                 downloaded_size = await self.download_with_progress(
                     download_url=download_url,
                     target_path=temp_path,
                     filename=final_filename,
                     session_id=session_id,
-                    token=token
+                    token=token,
+                    progress_callback=progress_callback
                 )
                 
                 # Check for cancellation after download

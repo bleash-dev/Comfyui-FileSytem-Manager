@@ -2,6 +2,7 @@ import asyncio
 from .utils import CivitAIUtils
 from .downloader import CivitAIDownloader
 from .progress import ProgressTracker
+from ..shared_state import download_cancellation_flags
 
 class CivitAIDownloadAPI:
     def __init__(self):
@@ -10,12 +11,9 @@ class CivitAIDownloadAPI:
 
     async def download_from_civitai(self, civitai_url: str, target_fsm_path: str, 
                                    filename: str = None, overwrite: bool = False, 
-                                   session_id: str = None, user_token: str = None):
-        """Download a model from CivitAI with progress tracking"""
+                                   session_id: str = None, user_token: str = None, progress_callback=None):
+        """Download a model from CivitAI with progress tracking and optional progress callback"""
         try:
-            # Import cancellation flags
-            from ..file_system_manager import download_cancellation_flags
-            
             # Check for cancellation at the start
             if session_id and download_cancellation_flags.get(session_id):
                 ProgressTracker.set_cancelled(session_id, "Download cancelled by user")
@@ -56,6 +54,10 @@ class CivitAIDownloadAPI:
                     10
                 )
                 
+                # Call external progress callback if provided
+                if progress_callback:
+                    progress_callback(session_id, f"Direct download URL detected (Version ID: {version_id})", 10)
+                
                 # Download using direct URL with cancellation support
                 result = await self.downloader.download_model_async(
                     model_id=None,  # Not needed for direct downloads
@@ -64,7 +66,8 @@ class CivitAIDownloadAPI:
                     filename=filename,
                     token=token_to_use,
                     session_id=session_id,
-                    direct_download_url=direct_download_url
+                    direct_download_url=direct_download_url,
+                    progress_callback=progress_callback
                 )
                 
                 return result
@@ -79,6 +82,10 @@ class CivitAIDownloadAPI:
                     10
                 )
                 
+                # Call external progress callback if provided
+                if progress_callback:
+                    progress_callback(session_id, f"Model ID: {model_id}" + (f", Version ID: {version_id}" if version_id else " (latest version)"), 10)
+                
                 # Download the model with cancellation support
                 result = await self.downloader.download_model_async(
                     model_id=model_id,
@@ -86,7 +93,8 @@ class CivitAIDownloadAPI:
                     target_fsm_path=target_fsm_path,
                     filename=filename,
                     token=token_to_use,
-                    session_id=session_id
+                    session_id=session_id,
+                    progress_callback=progress_callback
                 )
                 
                 return result
@@ -101,5 +109,7 @@ class CivitAIDownloadAPI:
             return {"success": False, "error": error_msg}
         finally:
             # Clean up cancellation flag
+            if session_id and session_id in download_cancellation_flags:
+                del download_cancellation_flags[session_id]
             if session_id and session_id in download_cancellation_flags:
                 del download_cancellation_flags[session_id]

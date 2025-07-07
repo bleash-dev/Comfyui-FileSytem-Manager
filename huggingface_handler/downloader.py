@@ -7,10 +7,11 @@ import tempfile
 import shutil
 from pathlib import Path
 from huggingface_hub import hf_hub_download, snapshot_download, get_hf_file_metadata, hf_hub_url
-from huggingface_hub.utils import build_hf_headers, hf_raise_for_status
+from huggingface_hub.utils import hf_raise_for_status
 from huggingface_hub.constants import HUGGINGFACE_CO_URL_HOME
 import requests
 from .utils import HuggingFaceUtils
+from ..shared_state import download_cancellation_flags
 
 class HuggingFaceDownloader:
     def __init__(self):
@@ -27,16 +28,13 @@ class HuggingFaceDownloader:
 
     def download_with_progress(self, repo_id: str, filename: str, token: str = None, progress_callback=None, session_id: str = None):
         """Download a single file with progress tracking"""
-        # Import cancellation flags
-        from ..file_system_manager import download_cancellation_flags
-        
         use_hf_transfer = os.environ.get("HF_HUB_ENABLE_HF_TRANSFER", "0") == "1"
         
         try:
             # Check for cancellation at the start
             if session_id and download_cancellation_flags.get(session_id):
                 raise Exception("Download cancelled by user")
-            
+
             if use_hf_transfer:
                 print("🚀 Using hf_transfer for faster download with progress tracking")
                 try:
@@ -66,9 +64,6 @@ class HuggingFaceDownloader:
 
     def _download_with_custom_progress(self, repo_id: str, filename: str, token: str = None, progress_callback=None, session_id: str = None):
         """Custom progress tracking implementation"""
-        # Import cancellation flags
-        from ..file_system_manager import download_cancellation_flags
-        
         total_size = 0
         actual_download_url = None
 
@@ -186,9 +181,6 @@ class HuggingFaceDownloader:
 
     def _download_with_hf_transfer_progress(self, repo_id: str, filename: str, token: str = None, progress_callback=None, session_id: str = None):
         """Download using hf_transfer with progress tracking via subprocess output capture"""
-        # Import cancellation flags
-        from ..file_system_manager import download_cancellation_flags
-        
         safe_suffix = f"_{Path(filename).name}"
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=safe_suffix)
         temp_file_path = temp_file.name
@@ -230,9 +222,6 @@ class HuggingFaceDownloader:
 
     def _run_hf_download_with_progress_capture(self, repo_id: str, filename: str, token: str = None, progress_callback=None, session_id: str = None):
         """Run hf_hub_download in a subprocess to capture hf_transfer output"""
-        # Import cancellation flags
-        from ..file_system_manager import download_cancellation_flags
-        
         download_script = f'''
 import os
 import sys
@@ -328,7 +317,6 @@ except Exception as e:
     def _fallback_download(self, repo_id: str, filename: str, token: str = None, session_id: str = None):
         """Final fallback to standard hf_hub_download"""
         # Import cancellation flags
-        from ..file_system_manager import download_cancellation_flags
         
         # Check for cancellation before fallback
         if session_id and download_cancellation_flags.get(session_id):
@@ -384,10 +372,7 @@ except Exception as e:
         """Async version of hf_transfer repository download with cancellation support"""
         import asyncio
         import time
-        
-        # Import cancellation flags
-        from ..file_system_manager import download_cancellation_flags
-        
+                
         # Get session_id from progress_callback context if available
         session_id = getattr(progress_callback, 'session_id', None) if hasattr(progress_callback, 'session_id') else None
         

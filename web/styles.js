@@ -934,219 +934,155 @@ style.textContent = `
 }
 
 .fs-global-progress {
-    margin-top: 6px;
-    padding: 8px;
-    background-color: rgba(0, 123, 255, 0.1);
-    border-radius: 4px;
-    border: 1px solid rgba(0, 123, 255, 0.3);
+    margin-top: 8px;
+    padding: 10px;
+    background-color: rgba(0, 123, 255, 0.08);
+    border-radius: 6px;
+    border: 1px solid rgba(0, 123, 255, 0.2);
     position: relative;
     font-size: 11px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.fs-global-progress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 8px;
+    gap: 8px;
+}
+
+.fs-global-progress-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
 }
 
 .fs-global-progress-bar {
     width: 100%;
-    height: 4px;
-    background-color: rgba(255, 255, 255, 0.2);
-    border-radius: 2px;
+    height: 6px;
+    background-color: rgba(255, 255, 255, 0.15);
+    border-radius: 3px;
     overflow: hidden;
-    margin-bottom: 4px;
+    position: relative;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
 }
 
 .fs-global-progress-fill {
     height: 100%;
     background: linear-gradient(90deg, #007bff, #0056b3);
-    transition: width 0.3s ease;
-    border-radius: 2px;
+    border-radius: 3px;
+    position: relative;
+    min-width: 1px;
+    transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.fs-downloading-animation {
+    overflow: hidden;
+}
+
+.fs-downloading-animation::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -50%;
+    width: 50%;
+    height: 100%;
+    background: linear-gradient(90deg, 
+        transparent 0%, 
+        rgba(255, 255, 255, 0.4) 50%, 
+        transparent 100%);
+    animation: shimmer 2s infinite;
+}
+
+@keyframes shimmer {
+    0% { 
+        left: -50%; 
+    }
+    100% { 
+        left: 100%; 
+    }
 }
 
 .fs-global-progress-text {
     color: var(--input-text);
-    font-weight: 500;
+    font-weight: 600;
+    font-size: 11px;
+    line-height: 1.2;
+    white-space: nowrap; /* Prevent text wrapping */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-height: 14px; /* Ensure consistent height even when speed isn't shown */
+}
+
+.fs-global-progress-stats {
+    color: var(--input-text);
+    font-size: 10px;
+    opacity: 0.8;
+    font-family: monospace;
+    line-height: 1.2;
+}
+
+/* Add specific styling for speed display */
+.fs-download-speed {
+    color: #28a745;
+    font-weight: 700;
+    font-size: 10px;
+}
+
+/* Ensure progress text doesn't jump around when speed appears/disappears */
+.fs-global-progress {
+    min-height: 60px; /* Consistent minimum height */
+}
+
+.fs-global-progress-header {
+    min-height: 20px; /* Consistent header height */
 }
 
 .fs-global-cancel-btn, .fs-global-retry-btn {
-    position: absolute;
-    top: 4px;
-    right: 4px;
     background: #dc3545;
     color: white;
     border: none;
-    border-radius: 50%;
-    width: 18px;
-    height: 18px;
-    font-size: 10px;
+    border-radius: 4px;
+    width: 20px;
+    height: 20px;
+    font-size: 11px;
+    font-weight: bold;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
     transition: all 0.2s ease;
+    flex-shrink: 0;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
 
 .fs-global-retry-btn {
     background: #007bff;
+    margin-left: 4px;
+    width: auto; /* Allow button to size based on content */
+    padding: 4px 8px; /* Add padding for better text display */
+    font-size: 10px; /* Slightly smaller font for "Retry" text */
+    min-width: 50px; /* Ensure minimum width for readability */
 }
 
 .fs-global-cancel-btn:hover {
     background: #c82333;
-    transform: scale(1.1);
+    transform: scale(1.05);
+    box-shadow: 0 2px 6px rgba(220, 53, 69, 0.4);
 }
 
 .fs-global-retry-btn:hover {
     background: #0056b3;
-    transform: scale(1.1);
+    transform: scale(1.05);
+    box-shadow: 0 2px 6px rgba(0, 123, 255, 0.4);
 }
 
-@keyframes downloading {
-    0% { background-position: 200% 0; }
-    100% { background-position: -200% 0; }
-}
-
-/* Enhanced workflow analysis notification styles */
-.fs-available-info {
-    color: #28a745 !important;
-    font-weight: 500;
-    margin: 0 0 5px 0 !important;
-}
-
-.fs-unavailable-info {
-    color: #dc3545 !important;
-    font-weight: 500;
-    margin: 0 0 10px 0 !important;
-}
-
-.fs-missing-model-item.available {
-    background-color: rgba(40, 167, 69, 0.1);
-    border-left: 2px solid #28a745;
-    padding-left: 6px;
-}
-
-.fs-missing-model-item.unavailable {
-    background-color: rgba(220, 53, 69, 0.1);
-    border-left: 2px solid #dc3545;
-    padding-left: 6px;
-}
-
-.fs-missing-model-item .fs-model-name {
-    font-family: monospace;
-    font-size: 10px;
-    max-width: 250px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-/* Missing Models Dialog Styles */
-.fs-missing-model-progress {
-    margin-top: 8px;
-    padding: 8px;
-    background-color: var(--comfy-input-bg);
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    font-size: 11px;
-}
-
-.fs-progress-info {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 4px;
-}
-
-.fs-progress-text {
-    color: var(--input-text);
-    font-size: 10px;
-}
-
-.fs-cancel-download {
-    background: #dc3545;
-    color: white;
-    border: none;
-    border-radius: 50%;
-    width: 16px;
-    height: 16px;
-    font-size: 10px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-}
-
-.fs-cancel-download:hover {
-    background: #c82333;
-}
-
-.fs-progress-bar-container {
-    width: 100%;
-    height: 4px;
-    background-color: rgba(255, 255, 255, 0.2);
-    border-radius: 2px;
-    overflow: hidden;
-}
-
-.fs-progress-bar-fill {
-    height: 100%;
-    background-color: #007bff;
-    transition: width 0.3s ease;
-    border-radius: 2px;
-}
-
-.fs-download-complete {
-    text-align: center;
-    padding: 4px;
-    font-weight: bold;
-}
-
-.fs-download-error {
-    text-align: center;
-    padding: 4px;
-}
-
-.fs-retry-download {
-    background: #007bff;
-    color: white;
-    border: none;
-    border-radius: 3px;
-    cursor: pointer;
-    font-size: 10px !important;
-    padding: 2px 6px !important;
-}
-
-.fs-retry-download:hover {
-    background: #0056b3;
-}
-
-/* Ensure missing models listbox items have proper spacing */
-.comfy-missing-models .p-listbox-option {
-    padding: 12px !important;
-}
-
-.comfy-missing-models .p-listbox-option > div {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-/* Style the download buttons in missing models dialog */
-.comfy-missing-models button[aria-label*="Download"] {
-    background-color: #007bff !important;
-    color: white !important;
-    border: none !important;
-    padding: 4px 8px !important;
-    border-radius: 3px !important;
-    font-size: 11px !important;
-    cursor: pointer !important;
-    transition: background-color 0.2s ease !important;
-}
-
-.comfy-missing-models button[aria-label*="Download"]:hover {
-    background-color: #0056b3 !important;
-}
-
-.comfy-missing-models button[aria-label*="Download"]:disabled {
-    background-color: #6c757d !important;
-    cursor: not-allowed !important;
-    opacity: 0.6 !important;
+.fs-global-cancel-btn:active,
+.fs-global-retry-btn:active {
+    transform: scale(0.95);
 }
 `;
 document.head.appendChild(style);

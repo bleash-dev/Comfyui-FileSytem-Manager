@@ -408,34 +408,35 @@ export class UIComponents {
         const progressText = progressContainer.querySelector('.fs-global-progress-text');
         const cancelBtn = progressContainer.querySelector('.fs-global-cancel-btn');
         
-        // Update progress bar
+        // Update progress bar with smooth animation
         if (progressFill) {
             const percentage = Math.round(progress.progress || 0);
             progressFill.style.width = `${percentage}%`;
+            
+            // Add visual enhancement for active downloads
+            if (progress.status === 'downloading') {
+                progressFill.style.background = 'linear-gradient(90deg, #007bff, #0056b3)';
+                progressFill.style.animation = 'shimmer 2s infinite';
+            }
         }
         
-        // Update progress text based on status
+        // Show backend-generated progress message directly
         if (progressText) {
+            // Use the backend message if available, otherwise show status
+            const message = progress.message || progress.status || 'Processing...';
+            progressText.innerHTML = message;
+            
+            // Set color based on status
             if (progress.status === 'downloading') {
-                const downloaded = this.formatFileSize(progress.downloaded_size || 0);
-                const total = progress.total_size ? this.formatFileSize(progress.total_size) : 'Unknown';
-                const percentage = Math.round(progress.progress || 0);
-                
-                if (progress.total_size && progress.total_size > 0) {
-                    progressText.textContent = `${downloaded} / ${total} (${percentage}%)`;
-                } else {
-                    progressText.textContent = `${downloaded} downloaded (${percentage}%)`;
-                }
+                progressText.style.color = '#007bff';
             } else if (progress.status === 'finishing') {
-                progressText.textContent = 'Finishing download...';
+                progressText.style.color = '#28a745';
             } else if (progress.status === 'failed') {
-                progressText.textContent = `Failed: ${progress.error || 'Unknown error'}`;
                 progressText.style.color = '#dc3545';
             } else if (progress.status === 'cancelled') {
-                progressText.textContent = 'Download cancelled';
                 progressText.style.color = '#ffc107';
             } else {
-                progressText.textContent = progress.status || 'Processing...';
+                progressText.style.color = 'var(--input-text)';
             }
         }
         
@@ -453,9 +454,11 @@ export class UIComponents {
         
         // Handle completion
         if (progress.status === 'downloaded') {
-            progressText.textContent = 'Download complete!';
-            progressText.style.color = '#28a745';
             if (cancelBtn) cancelBtn.style.display = 'none';
+            if (progressFill) {
+                progressFill.style.width = '100%';
+                progressFill.style.animation = 'none';
+            }
             
             setTimeout(() => {
                 if (progressContainer && progressContainer.parentNode) {
@@ -473,27 +476,28 @@ export class UIComponents {
             }, 2000);
         } else if (progress.status === 'failed' || progress.status === 'cancelled') {
             if (cancelBtn) cancelBtn.style.display = 'none';
+            if (progressFill) progressFill.style.animation = 'none';
             
-            // Add retry button for failed downloads
-            if (progress.status === 'failed') {
-                let retryBtn = progressContainer.querySelector('.fs-global-retry-btn');
-                if (!retryBtn) {
-                    retryBtn = document.createElement('button');
-                    retryBtn.className = 'fs-global-retry-btn';
-                    retryBtn.textContent = '🔄';
-                    retryBtn.title = 'Retry Download';
-                    retryBtn.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        if (progressContainer && progressContainer.parentNode) {
-                            progressContainer.remove();
-                        }
-                        if (downloadBtn) {
-                            downloadBtn.style.display = 'inline-block';
-                            downloadBtn.click();
-                        }
-                    });
-                    progressContainer.appendChild(retryBtn);
-                }
+            // Add retry button for both failed and cancelled downloads
+            let retryBtn = progressContainer.querySelector('.fs-global-retry-btn');
+            if (!retryBtn) {
+                retryBtn = document.createElement('button');
+                retryBtn.className = 'fs-global-retry-btn';
+                retryBtn.innerHTML = '🔄 Retry';
+                retryBtn.title = 'Retry Download';
+                retryBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    // Clean up the progress display
+                    if (progressContainer && progressContainer.parentNode) {
+                        progressContainer.remove();
+                    }
+                    // Show the download button and trigger retry
+                    if (downloadBtn) {
+                        downloadBtn.style.display = 'inline-block';
+                        downloadBtn.click(); // Trigger retry by simulating download button click
+                    }
+                });
+                progressContainer.appendChild(retryBtn);
             }
         }
     }

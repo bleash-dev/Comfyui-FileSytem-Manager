@@ -125,7 +125,7 @@ class BrowserAutomation:
                     return False
             
             current_url = page.url
-            if any(pattern in current_url for pattern in ["/blob/", "/resolve/", "/tree/"]):
+            if any(pattern in current_url for pattern in ["/blob/", "/resolve/", "/tree/", "/blame/"]):
                 download_elements = await page.locator('a[href*="download"], button:has-text("Download")').count()
                 if download_elements > 0:
                     return True

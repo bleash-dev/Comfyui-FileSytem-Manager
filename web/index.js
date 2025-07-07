@@ -1,14 +1,22 @@
 import { app } from "../../scripts/app.js";
 import { FileSystemManager } from "./FileSystemManager.js";
+import { MissingModelsManager } from "./MissingModelsManager.js";
 import "./styles.js";
 
-// Create global instance
+// Create global instances
 const fileSystemManager = new FileSystemManager();
+const missingModelsManager = new MissingModelsManager();
+
+// Make them globally available for debugging
+window.fileSystemManager = fileSystemManager;
+window.missingModelsManager = missingModelsManager;
 
 // Add button to ComfyUI interface
 app.registerExtension({
     name: "FileSystemManager",
     async setup() {
+        console.log("🚀 File System Manager Extension Loading");
+        
         // Add file manager button to the top menu bar
         const menu = document.querySelector('.comfyui-menu-right');
         if (menu) {
@@ -22,21 +30,38 @@ app.registerExtension({
             fileManagerBtn.style.cssText = `
                 background: none;
                 border: none;
-                padding: 4px;
+                padding: 8px;
                 margin: 0 4px;
                 cursor: pointer;
                 color: var(--input-text);
-                display: inline-flex; /* Changed from flex */
+                display: inline-flex;
                 align-items: center;
                 justify-content: center;
-                vertical-align: middle; /* Added for better alignment in mixed contexts */
+                vertical-align: middle;
+                border-radius: 4px;
+                transition: background-color 0.2s ease;
             `;
             
+            // Add hover effect
+            fileManagerBtn.addEventListener('mouseenter', () => {
+                fileManagerBtn.style.backgroundColor = 'rgba(255, 255, 255, 0.1)';
+            });
+            
+            fileManagerBtn.addEventListener('mouseleave', () => {
+                fileManagerBtn.style.backgroundColor = 'transparent';
+            });
+            
             fileManagerBtn.addEventListener('click', () => {
+                console.log("📁 File System Manager button clicked");
                 fileSystemManager.showModal();
             });
             
             menu.appendChild(fileManagerBtn);
+            console.log("✅ File System Manager button added to menu");
+        } else {
+            console.warn("⚠️ Could not find ComfyUI menu to add File System Manager button");
         }
+        
+        console.log("✅ File System Manager Extension Loaded");
     }
 });
