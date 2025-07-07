@@ -751,7 +751,7 @@ class MissingModelHandler:
                 print(f"✅ Found model in global storage: {global_result['global_model_path']}")
                 
                 # Try downloading from global storage
-                # global_download_result = await self.download_from_global_models(global_result, target_directory, session_id)
+                global_download_result = await self.download_from_global_models(global_result, target_directory, session_id)
                 if global_download_result["success"]:
                     return global_download_result
                 else:
