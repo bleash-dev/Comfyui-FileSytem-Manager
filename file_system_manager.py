@@ -655,7 +655,7 @@ async def upload_from_direct_url_endpoint(request):
         if session_id: direct_upload_progress_store[session_id] = {"status": "error", "message": str(e), "percentage": 0}
         return web.json_response({'success': False, 'error': str(e)}, status=500)
 
-@PS.instance.routes.get("/filesystem/direct_upload_progress/{session_id}")
+@PS.instance.routes.get("/filesystem/direct_link_progress/{session_id}")
 async def get_direct_upload_progress_endpoint(request):
     try:
         session_id = request.match_info['session_id']
