@@ -5,4 +5,4 @@ hf-transfer>=0.1.0
 fake_useragent>=2.2.0
 google>=3.0.0
 boto3>=1.39.3
-sageattention=>1.0.6
+sageattention>=1.0.6
