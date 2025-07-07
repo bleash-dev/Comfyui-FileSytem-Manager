@@ -520,6 +520,114 @@ class MissingModelHandler:
         
         return score
 
+    async def download_from_global_models(self, global_result: Dict, target_directory: str, session_id: str = None) -> Dict:
+        """Download model from global storage"""
+        try:
+            model_path = global_result['global_model_path']
+            
+            MissingModelProgressTracker.update_progress(
+                session_id, 
+                f"Downloading from global storage: {model_path}...", 
+                30
+            )
+            
+            # Use S3 path to determine the actual destination instead of frontend target_directory
+            s3_path = global_result.get('s3_path', '')
+            if s3_path and 'pod_sessions/global_shared/models/' in s3_path:
+                # Extract the relative path from S3 to determine correct local destination
+                s3_relative = s3_path.split('pod_sessions/global_shared/models/')[-1]
+                # The s3_relative already contains the full path like "checkpoints/model.safetensors"
+                # So we use this to determine the correct local destination
+                actual_target_directory = os.path.dirname(s3_relative) if os.path.dirname(s3_relative) else ""
+                print(f"📁 Using S3-derived destination: models/{actual_target_directory}")
+            else:
+                # Fallback to the original target_directory if S3 path is not available
+                actual_target_directory = target_directory.replace('models/', '') if target_directory.startswith('models/') else target_directory
+                print(f"📁 Using fallback destination: models/{actual_target_directory}")
+            
+            # Start the download using global models manager
+            download_task = asyncio.create_task(
+                self.global_models_manager.download_model(model_path)
+            )
+            
+            # Monitor progress from global models progress store
+            while not download_task.done():
+                await asyncio.sleep(0.5)
+                
+                # Check for cancellation
+                if session_id and download_cancellation_flags.get(session_id):
+                    # Cancel the global model download
+                    await self.global_models_manager.cancel_download(model_path)
+                    download_task.cancel()
+                    MissingModelProgressTracker.set_cancelled(session_id, "Download cancelled by user")
+                    return {"success": False, "error": "Download cancelled by user", "was_cancelled": True}
+                
+                # Update progress from global models store
+                if model_path in global_progress_store:
+                    global_progress = global_progress_store[model_path]
+                    progress_percent = global_progress.get('progress', 0)
+                    message = global_progress.get('message', 'Downloading from global storage...')
+                    
+                    # Map global progress (0-100%) to missing models progress (30-90%)
+                    mapped_percent = 30 + int(progress_percent * 0.6)
+                    MissingModelProgressTracker.update_progress(session_id, message, mapped_percent)
+                    
+                    # Check if download completed or failed
+                    status = global_progress.get('status', 'downloading')
+                    if status == 'downloaded':
+                        break
+                    elif status in ['failed', 'cancelled']:
+                        break
+            
+            # Get final result
+            try:
+                success = await download_task
+            except asyncio.CancelledError:
+                return {"success": False, "error": "Download cancelled", "was_cancelled": True}
+            
+            if success:
+                # Determine the local path where the file was downloaded
+                # Use the S3-derived path for accurate location
+                if s3_path and 'pod_sessions/global_shared/models/' in s3_path:
+                    s3_relative = s3_path.split('pod_sessions/global_shared/models/')[-1]
+                    local_path = self.global_models_manager.models_dir / s3_relative
+                else:
+                    # Fallback to the original logic
+                    local_path = self.global_models_manager.models_dir / model_path
+                
+                MissingModelProgressTracker.set_completed(
+                    session_id,
+                    f"Successfully downloaded {global_result['filename']} from global storage"
+                )
+                
+                return {
+                    "success": True,
+                    "source": "global_models",
+                    "message": f"Downloaded {global_result['filename']} from global storage",
+                    "path": str(local_path),
+                    "directory": f"models/{actual_target_directory}",  # Use S3-derived directory
+                    "original_name": global_result['filename'],
+                    "search_method": "global_storage"
+                }
+            else:
+                # Check if it was cancelled
+                if model_path in global_progress_store:
+                    global_status = global_progress_store[model_path].get('status', 'failed')
+                    if global_status == 'cancelled':
+                        return {"success": False, "error": "Download cancelled by user", "was_cancelled": True}
+                
+                error_msg = "Failed to download from global storage"
+                if model_path in global_progress_store:
+                    error_msg = global_progress_store[model_path].get('message', error_msg)
+                
+                print(f"❌ Global model download failed: {error_msg}")
+                return {"success": False, "error": f"Global storage download failed: {error_msg}"}
+                
+        except Exception as e:
+            error_msg = f"Error downloading from global storage: {str(e)}"
+            print(f"❌ {error_msg}")
+            return {"success": False, "error": error_msg}
+
     async def search_global_models(self, model_name: str, session_id: str = None) -> Optional[Dict]:
         """Search for model in global storage first"""
         if not self.global_models_manager or not GLOBAL_MODELS_AVAILABLE:
@@ -559,13 +667,13 @@ class MissingModelHandler:
                             "category": category,
                             "filename": filename,
                             "global_model_path": f"{category}/{filename}",
-                            "s3_path": file_info.get('s3_path'),
+                            "s3_path": file_info.get('s3_path'),  # Include S3 path for destination determination
                             "size": file_info.get('size', 0),
                             "relevance_score": score,
                             "search_method": "global_storage"
                         }
                         
-                        print(f"🎯 Found global model match: {category}/{filename} (score: {score})")
+                        print(f"🎯 Found global model match: {category}/{filename} (score: {score}) with S3 path: {file_info.get('s3_path', 'N/A')}")
             
             if best_match:
                 print(f"✅ Best global model match: {best_match['global_model_path']} (score: {best_score})")
@@ -628,94 +736,6 @@ class MissingModelHandler:
                 score += 45.0
         
         return score
-
-    async def download_from_global_models(self, global_result: Dict, target_directory: str, session_id: str = None) -> Dict:
-        """Download model from global storage"""
-        try:
-            model_path = global_result['global_model_path']
-            
-            MissingModelProgressTracker.update_progress(
-                session_id, 
-                f"Downloading from global storage: {model_path}...", 
-                30
-            )
-            
-            # Start the download using global models manager
-            download_task = asyncio.create_task(
-                self.global_models_manager.download_model(model_path)
-            )
-            
-            # Monitor progress from global models progress store
-            while not download_task.done():
-                await asyncio.sleep(0.5)
-                
-                # Check for cancellation
-                if session_id and download_cancellation_flags.get(session_id):
-                    # Cancel the global model download
-                    await self.global_models_manager.cancel_download(model_path)
-                    download_task.cancel()
-                    MissingModelProgressTracker.set_cancelled(session_id, "Download cancelled by user")
-                    return {"success": False, "error": "Download cancelled by user", "was_cancelled": True}
-                
-                # Update progress from global models store
-                if model_path in global_progress_store:
-                    global_progress = global_progress_store[model_path]
-                    progress_percent = global_progress.get('progress', 0)
-                    message = global_progress.get('message', 'Downloading from global storage...')
-                    
-                    # Map global progress (0-100%) to missing models progress (30-90%)
-                    mapped_percent = 30 + int(progress_percent * 0.6)
-                    MissingModelProgressTracker.update_progress(session_id, message, mapped_percent)
-                    
-                    # Check if download completed or failed
-                    status = global_progress.get('status', 'downloading')
-                    if status == 'downloaded':
-                        break
-                    elif status in ['failed', 'cancelled']:
-                        break
-            
-            # Get final result
-            try:
-                success = await download_task
-            except asyncio.CancelledError:
-                return {"success": False, "error": "Download cancelled", "was_cancelled": True}
-            
-            if success:
-                # Determine the local path where the file was downloaded
-                local_path = self.global_models_manager.models_dir / model_path
-                
-                MissingModelProgressTracker.set_completed(
-                    session_id,
-                    f"Successfully downloaded {global_result['filename']} from global storage"
-                )
-                
-                return {
-                    "success": True,
-                    "source": "global_models",
-                    "message": f"Downloaded {global_result['filename']} from global storage",
-                    "path": str(local_path),
-                    "directory": target_directory,
-                    "original_name": global_result['filename'],
-                    "search_method": "global_storage"
-                }
-            else:
-                # Check if it was cancelled
-                if model_path in global_progress_store:
-                    global_status = global_progress_store[model_path].get('status', 'failed')
-                    if global_status == 'cancelled':
-                        return {"success": False, "error": "Download cancelled by user", "was_cancelled": True}
-                
-                error_msg = "Failed to download from global storage"
-                if model_path in global_progress_store:
-                    error_msg = global_progress_store[model_path].get('message', error_msg)
-                
-                print(f"❌ Global model download failed: {error_msg}")
-                return {"success": False, "error": f"Global storage download failed: {error_msg}"}
-                
-        except Exception as e:
-            error_msg = f"Error downloading from global storage: {str(e)}"
-            print(f"❌ {error_msg}")
-            return {"success": False, "error": error_msg}
 
     async def download_missing_model(self, model_name: str, node_type: str = None, session_id: str = None) -> Dict:
         """Download a missing model by first checking global storage, then searching HF and CivitAI"""
