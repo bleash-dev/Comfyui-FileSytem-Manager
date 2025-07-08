@@ -1502,7 +1502,7 @@ export class FileSystemManager {
 
         const pollInterval = setInterval(async () => {
             try {
-                const response = await api.fetchApi(`/filesystem/direct_upload_progress/${sessionId}`);
+                const response = await api.fetchApi(`/filesystem/direct_link_progress/${sessionId}`);
                 const progress = await response.json();
                 if (progressText) progressText.textContent = progress.message || 'Downloading...';
                 if (progressFill) progressFill.style.width = `${progress.percentage || 0}%`;
