@@ -10,6 +10,7 @@ import folder_paths
 from .huggingface_handler.api import HuggingFaceDownloadAPI
 from .civitai_handler.api import CivitAIDownloadAPI
 from .shared_state import download_cancellation_flags
+from .utils.nodes_not_path_mapping import get_directories_for_loader_class
 
 # Import global models manager
 try:
@@ -520,8 +521,8 @@ class MissingModelHandler:
         
         return score
 
-    async def download_from_global_models(self, global_result: Dict, target_directory: str, session_id: str = None) -> Dict:
-        """Download model from global storage"""
+    async def download_from_global_models(self, global_result: Dict, target_directory: str, session_id: str = None, node_type: str = None, field_name: str = None) -> Dict:
+        """Download model from global storage with proper path handling"""
         try:
             model_path = global_result['global_model_path']
             
@@ -531,19 +532,24 @@ class MissingModelHandler:
                 30
             )
             
-            # Use S3 path to determine the actual destination instead of frontend target_directory
-            s3_path = global_result.get('s3_path', '')
-            if s3_path and 'pod_sessions/global_shared/models/' in s3_path:
-                # Extract the relative path from S3 to determine correct local destination
-                s3_relative = s3_path.split('pod_sessions/global_shared/models/')[-1]
-                # The s3_relative already contains the full path like "checkpoints/model.safetensors"
-                # So we use this to determine the correct local destination
-                actual_target_directory = os.path.dirname(s3_relative) if os.path.dirname(s3_relative) else ""
-                print(f"📁 Using S3-derived destination: models/{actual_target_directory}")
+            # Determine the correct target directory based on node type
+            if node_type:
+                actual_target_directory = self.determine_target_directory(
+                    global_result['filename'], 
+                    node_type, 
+                    field_name
+                )
             else:
-                # Fallback to the original target_directory if S3 path is not available
-                actual_target_directory = target_directory.replace('models/', '') if target_directory.startswith('models/') else target_directory
-                print(f"📁 Using fallback destination: models/{actual_target_directory}")
+                actual_target_directory = target_directory
+            
+            print(f"📁 Target directory determined: {actual_target_directory}")
+            
+            # Get S3 path to understand the source structure
+            s3_path = global_result.get('s3_path', '')
+            s3_relative_path = None
+            if s3_path and 'pod_sessions/global_shared/models/' in s3_path:
+                s3_relative_path = s3_path.split('pod_sessions/global_shared/models/')[-1]
+                print(f"� S3 relative path: {s3_relative_path}")
             
             # Start the download using global models manager
             download_task = asyncio.create_task(
@@ -556,7 +562,6 @@ class MissingModelHandler:
                 
                 # Check for cancellation
                 if session_id and download_cancellation_flags.get(session_id):
-                    # Cancel the global model download
                     await self.global_models_manager.cancel_download(model_path)
                     download_task.cancel()
                     MissingModelProgressTracker.set_cancelled(session_id, "Download cancelled by user")
@@ -586,14 +591,47 @@ class MissingModelHandler:
                 return {"success": False, "error": "Download cancelled", "was_cancelled": True}
             
             if success:
-                # Determine the local path where the file was downloaded
-                # Use the S3-derived path for accurate location
-                if s3_path and 'pod_sessions/global_shared/models/' in s3_path:
-                    s3_relative = s3_path.split('pod_sessions/global_shared/models/')[-1]
-                    local_path = self.global_models_manager.models_dir / s3_relative
+                # Determine where the file was actually downloaded by S3
+                if s3_relative_path:
+                    s3_local_path = self.global_models_manager.models_dir / s3_relative_path
+                    s3_directory = f"models/{os.path.dirname(s3_relative_path)}" if os.path.dirname(s3_relative_path) else "models"
                 else:
-                    # Fallback to the original logic
-                    local_path = self.global_models_manager.models_dir / model_path
+                    s3_local_path = self.global_models_manager.models_dir / model_path
+                    s3_directory = f"models/{os.path.dirname(model_path)}" if os.path.dirname(model_path) else "models"
+                
+                # Check if S3 directory matches our target directory
+                s3_directory_clean = s3_directory.rstrip('/')
+                actual_target_clean = actual_target_directory.rstrip('/')
+                
+                final_path = s3_local_path
+                
+                if s3_directory_clean != actual_target_clean:
+                    # S3 path differs from target path, create symlink
+                    print(f"🔗 S3 directory ({s3_directory_clean}) differs from target ({actual_target_clean}), creating symlink...")
+                    
+                    # Create target directory if it doesn't exist
+                    target_dir_path = Path(self.comfyui_base) / actual_target_directory
+                    target_dir_path.mkdir(parents=True, exist_ok=True)
+                    
+                    # Create symlink path
+                    symlink_path = target_dir_path / global_result['filename']
+                    
+                    try:
+                        # Remove existing symlink if it exists
+                        if symlink_path.is_symlink():
+                            symlink_path.unlink()
+                        elif symlink_path.exists():
+                            print(f"⚠️ Target file exists but is not a symlink: {symlink_path}")
+                        
+                        # Create symlink
+                        symlink_path.symlink_to(s3_local_path)
+                        print(f"✅ Created symlink: {symlink_path} -> {s3_local_path}")
+                        final_path = symlink_path
+                        
+                    except Exception as symlink_error:
+                        print(f"⚠️ Failed to create symlink: {symlink_error}")
+                        print(f"📁 Model available at S3 location: {s3_local_path}")
+                        final_path = s3_local_path
                 
                 MissingModelProgressTracker.set_completed(
                     session_id,
@@ -604,10 +642,11 @@ class MissingModelHandler:
                     "success": True,
                     "source": "global_models",
                     "message": f"Downloaded {global_result['filename']} from global storage",
-                    "path": str(local_path),
-                    "directory": f"models/{actual_target_directory}",  # Use S3-derived directory
+                    "path": str(final_path),
+                    "directory": actual_target_directory,
                     "original_name": global_result['filename'],
-                    "search_method": "global_storage"
+                    "search_method": "global_storage",
+                    "symlink_created": s3_directory_clean != actual_target_clean
                 }
             else:
                 # Check if it was cancelled
@@ -737,7 +776,7 @@ class MissingModelHandler:
         
         return score
 
-    async def download_missing_model(self, model_name: str, node_type: str = None, session_id: str = None) -> Dict:
+    async def download_missing_model(self, model_name: str, node_type: str = None, session_id: str = None, field_name: str = None) -> Dict:
         """Download a missing model by first checking global storage, then searching HF and CivitAI"""
         try:
             # Check for cancellation at the very start
@@ -748,9 +787,15 @@ class MissingModelHandler:
             MissingModelProgressTracker.update_progress(session_id, f"Processing model: {model_name}...", 5)
             print(f"🔍 Starting download for model: {model_name} (type: {node_type})")
             
-            # Infer target directory
-            target_directory = self.infer_model_directory(model_name, node_type)
-            print(f"📁 Inferred target directory: {target_directory}")
+            # If node_type is not provided, try to extract it from workflow
+            if not node_type:
+                node_type = self.get_node_type_from_workflow(model_name)
+                if node_type:
+                    print(f"📋 Extracted node type from workflow: {node_type}")
+            
+            # Determine target directory using the utility function
+            target_directory = self.determine_target_directory(model_name, node_type, field_name)
+            print(f"📁 Target directory determined: {target_directory}")
             
             # Check for cancellation before proceeding
             if session_id and download_cancellation_flags.get(session_id):
@@ -761,43 +806,60 @@ class MissingModelHandler:
             
             # 🆕 STEP 1: Check global models first
             global_result = await self.search_global_models(model_name, session_id)
+
+            print(f"🔍 Global search result: {global_result}")
             
             # Check for cancellation after search
             if session_id and download_cancellation_flags.get(session_id):
                 MissingModelProgressTracker.set_cancelled(session_id, "Download cancelled by user")
                 return {"success": False, "error": "Download cancelled by user"}
             
-            if global_result and not (session_id and download_cancellation_flags.get(session_id)):
+            if global_result:
                 print(f"✅ Found model in global storage: {global_result['global_model_path']}")
                 
-                # Try downloading from global storage
-                global_download_result = await self.download_from_global_models(global_result, target_directory, session_id)
+                # Try downloading from global storage with node type and field name
+                global_download_result = await self.download_from_global_models(
+                    global_result, 
+                    target_directory, 
+                    session_id, 
+                    node_type, 
+                    field_name
+                )
+                
+                # Check if global download was cancelled by user
+                if global_download_result.get("was_cancelled", False):
+                    print(f"🚫 Global storage download cancelled by user, stopping download process...")
+                    MissingModelProgressTracker.set_cancelled(session_id, "Download cancelled by user")
+                    return {"success": False, "error": "Download cancelled by user"}
+                
+                # If global download succeeded, return immediately
                 if global_download_result["success"]:
                     return global_download_result
-                else:
-                    # Check if global download was cancelled by user
-                    was_cancelled = global_download_result.get("was_cancelled", False)
-                    if was_cancelled:
-                        # User cancelled global download - STOP HERE, don't try internet
-                        print(f"🚫 Global storage download cancelled by user, stopping download process...")
-                        MissingModelProgressTracker.set_cancelled(
-                            session_id, 
-                            "Download cancelled by user"
-                        )
-                        return {"success": False, "error": "Download cancelled by user"}
-                    else:
-                        # Global download failed for other reasons, continue to internet search
-                        print(f"⚠️ Global storage download failed: {global_download_result.get('error')}")
-                        MissingModelProgressTracker.update_progress(
-                            session_id, 
-                            f"Global storage failed, searching internet: {global_download_result.get('error', 'Unknown error')}", 
-                            20
-                        )
+                
+                # Global download failed for other reasons, continue to internet search
+                print(f"⚠️ Global storage download failed: {global_download_result.get('error')}")
+                MissingModelProgressTracker.update_progress(
+                    session_id, 
+                    f"Global storage failed, searching internet: {global_download_result.get('error', 'Unknown error')}", 
+                    20
+                )
             else:
                 print(f"❌ Model not found in global storage, searching internet...")
                 MissingModelProgressTracker.update_progress(session_id, "Not found in global storage, searching internet...", 20)
-            
-            # STEP 2: Proceed with internet search (only if not cancelled)
+                
+                # If global download succeeded, return immediately
+                if global_download_result["success"]:
+                    return global_download_result
+                
+                # Global download failed for other reasons, continue to internet search
+                print(f"⚠️ Global storage download failed: {global_download_result.get('error')}")
+                MissingModelProgressTracker.update_progress(
+                    session_id, 
+                    f"Global storage failed, searching internet: {global_download_result.get('error', 'Unknown error')}", 
+                    20
+                )
+ 
+            # STEP 2: Proceed with internet search (only if global storage failed or model not found)
             # Check for cancellation again before proceeding to internet search
             if session_id and download_cancellation_flags.get(session_id):
                 MissingModelProgressTracker.set_cancelled(session_id, "Download cancelled by user")
@@ -1065,6 +1127,84 @@ class MissingModelHandler:
         encoded_message = urllib.parse.quote(message)
         
         return f"{base_discord_url}?message={encoded_message}"
+
+    def get_node_type_from_workflow(self, model_name: str) -> Optional[str]:
+        """Extract node type from current workflow JSON + model file name"""
+        try:
+            # Try to get the current workflow from ComfyUI API
+            workflow_data = None
+            
+            # First, check if we can access the workflow from the global state
+            try:
+                import execution
+                if hasattr(execution, 'current_workflow') and execution.current_workflow:
+                    workflow_data = execution.current_workflow
+            except ImportError:
+                pass
+            
+            if not workflow_data:
+                # Try to read from the UI state if available
+                try:
+                    from server import PromptServer
+                    if hasattr(PromptServer, 'instance') and PromptServer.instance:
+                        # This is a fallback approach - in practice, you might need to
+                        # implement a way to access the current workflow
+                        pass
+                except ImportError:
+                    pass
+            
+            if workflow_data:
+                # Search through workflow nodes to find which node is using this model
+                for node_id, node_data in workflow_data.items():
+                    if isinstance(node_data, dict) and 'class_type' in node_data:
+                        class_type = node_data['class_type']
+                        inputs = node_data.get('inputs', {})
+                        
+                        # Check if any input value matches our model name
+                        for input_key, input_value in inputs.items():
+                            if isinstance(input_value, str) and input_value == model_name:
+                                print(f"🎯 Found model '{model_name}' in node '{class_type}' input '{input_key}'")
+                                return class_type
+                        
+                        # Also check for partial matches (model name without extension)
+                        model_base = model_name.rsplit('.', 1)[0] if '.' in model_name else model_name
+                        for input_key, input_value in inputs.items():
+                            if isinstance(input_value, str):
+                                input_base = input_value.rsplit('.', 1)[0] if '.' in input_value else input_value
+                                if input_base == model_base:
+                                    print(f"🎯 Found model '{model_name}' (partial) in node '{class_type}' input '{input_key}'")
+                                    return class_type
+            
+            return None
+            
+        except Exception as e:
+            print(f"⚠️ Error extracting node type from workflow: {e}")
+            return None
+
+    def determine_target_directory(self, model_name: str, node_type: str = None, field_name: str = None) -> str:
+        """Determine target directory based on node type using the utility function"""
+        try:
+            # If node_type is provided, use the utility function
+            if node_type:
+                directories = get_directories_for_loader_class(node_type)
+                if directories:
+                    # Handle special case for VAE nodes
+                    if node_type == "VAELoader" and len(directories) > 1:
+                        # Check field_name to determine vae vs vae_approx
+                        if field_name and 'approx' in field_name.lower():
+                            return "models/vae_approx"
+                        else:
+                            return "models/vae"
+                    else:
+                        # Use the first directory for other nodes
+                        return f"models/{directories[0]}"
+            
+            # Fallback to the original inference method
+            return self.infer_model_directory(model_name, node_type)
+            
+        except Exception as e:
+            print(f"⚠️ Error determining target directory: {e}")
+            return self.infer_model_directory(model_name, node_type)
 
 # Global instance
 missing_model_handler = MissingModelHandler()

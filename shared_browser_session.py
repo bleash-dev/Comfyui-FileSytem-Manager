@@ -97,37 +97,39 @@ class SharedBrowserSessionManager:
                           'AppleWebKit/537.36 (KHTML, like Gecko) '
                           'Chrome/120.0.0.0 Safari/537.36')
             
-            session_state_file = session_path / 'session_state.json'
-            storage_state = (str(session_state_file)
-                             if session_state_file.exists() else None)
-            
             default_options = {
                 'user_agent': user_agent,
                 'viewport': {'width': 1920, 'height': 1080},
-                'storage_state': storage_state,
                 'accept_downloads': True,
                 'java_script_enabled': True,
             }
             
+           
+        try:
             # Merge with user options
             default_options.update(context_options)
+            context = await self._browser.new_context(**default_options)
             
-            try:
-                context = await self._browser.new_context(**default_options)
-                self._contexts[service] = context
+            # Try to load cookies from session_state.json
+            cookies_file = session_path / 'session_state.json'
+            if cookies_file.exists():
+                with open(cookies_file, 'r') as f:
+                    cookie_data = json.load(f)
                 
-                print(f"🔐 Created persistent browser context for {service}")
-                return context
-                
-            except Exception as e:
-                msg = f"Failed to load session state for {service}, creating fresh context: {e}"
-                print(f"⚠️ {msg}")
-                # Try without storage state
-                if 'storage_state' in default_options:
-                    del default_options['storage_state']
-                context = await self._browser.new_context(**default_options)
-                self._contexts[service] = context
-                return context
+                if cookie_data.get('cookies'):
+                    print(f"🍪 Loading {len(cookie_data['cookies'])} cookies from session_state.json")
+                    await context.add_cookies(cookie_data['cookies'])
+                    print(f"✅ Successfully loaded cookies into {service} context")
+            
+            self._contexts[service] = context
+            return context
+            
+        except Exception as fallback_error:
+            print(f"❌ Cookie fallback also failed for {service}: {fallback_error}")
+            # Create completely fresh context as last resort
+            context = await self._browser.new_context(**default_options)
+            self._contexts[service] = context
+            return context
 
     async def save_session_state(self, service: str):
         """Save the current session state for a service"""
@@ -145,8 +147,45 @@ class SharedBrowserSessionManager:
             # Save browser state (cookies, localStorage, etc.)
             storage_state = await self._contexts[service].storage_state()
             
-            with open(state_file, 'w') as f:
-                json.dump(storage_state, f, indent=2)
+            # Also get fresh cookies directly from context
+            fresh_cookies = await self._contexts[service].cookies()
+            
+            # Merge fresh cookies into storage state to ensure we have all cookies
+            if fresh_cookies:
+                storage_state['cookies'] = fresh_cookies
+                print(f"🍪 Updated storage state with {len(fresh_cookies)} fresh cookies")
+            
+            # Debug: Print cookie information for troubleshooting
+            if storage_state.get('cookies'):
+                cookie_count = len(storage_state['cookies'])
+                print(f"🍪 Found {cookie_count} cookies for {service}")
+                for cookie in storage_state['cookies']:
+                    name = cookie.get('name')
+                    domain = cookie.get('domain')
+                    secure = cookie.get('secure', False)
+                    print(f"  - {name}: {domain} (secure: {secure})")
+                    
+                # Save the updated session state
+                with open(state_file, 'w') as f:
+                    json.dump(storage_state, f, indent=2)
+                
+                # Also save just the cookies to a separate file for easy inspection
+                cookies_file = session_path / 'session_state.json'
+                cookie_data = {
+                    'service': service,
+                    'timestamp': str(asyncio.get_event_loop().time()),
+                    'cookies': fresh_cookies,
+                    'total_cookies': len(fresh_cookies)
+                }
+                with open(cookies_file, 'w') as f:
+                    json.dump(cookie_data, f, indent=2)
+                
+                print(f"💾 Saved {len(fresh_cookies)} cookies to session_state.json")
+            else:
+                print(f"⚠️ No cookies found in session state for {service}")
+                # Still save the session state even without cookies
+                with open(state_file, 'w') as f:
+                    json.dump(storage_state, f, indent=2)
             
             print(f"💾 Saved session state for {service}")
             
@@ -190,17 +229,19 @@ class SharedBrowserSessionManager:
                         return True
                 
             elif service == 'huggingface':
-                # Check Hugging Face authentication
+                # Check Hugging Face authentication - more thorough check
                 await page.goto('https://huggingface.co/', timeout=30000)
                 await page.wait_for_timeout(3000)
                 
-                # Look for signs of being logged in
+                # First check for user menu/profile indicators
                 login_indicators = [
                     'a[href*="/settings"]',
                     'button:has-text("Log out")',
                     '[data-testid="user-menu"]',
                     '.avatar',
-                    '[aria-label*="user"]'
+                    '[aria-label*="user"]',
+                    'a[href*="/profile"]',
+                    '.user-menu'
                 ]
                 
                 for indicator in login_indicators:
@@ -208,6 +249,34 @@ class SharedBrowserSessionManager:
                         await page.close()
                         print(f"✅ {service} is already authenticated")
                         return True
+                
+                # Secondary check: try accessing a protected page
+                try:
+                    await page.goto('https://huggingface.co/settings/profile', 
+                                  timeout=10000)
+                    await page.wait_for_timeout(2000)
+                    
+                    # If we can access settings, we're logged in
+                    current_url = page.url
+                    if 'settings' in current_url and 'login' not in current_url:
+                        await page.close()
+                        print(f"✅ {service} authenticated (via settings access)")
+                        return True
+                        
+                except Exception:
+                    # If settings access fails, we're likely not logged in
+                    pass
+                
+                # Final check: look for login/register buttons (indicates not logged in)
+                login_buttons = await page.locator(
+                    'a[href*="/login"], button:has-text("Sign in"), '
+                    'button:has-text("Log in"), a:has-text("Sign up")'
+                ).count()
+                
+                if login_buttons > 0:
+                    await page.close()
+                    print(f"❌ {service} is not authenticated (login buttons found)")
+                    return False
             
             await page.close()
             print(f"❌ {service} is not authenticated")
@@ -290,14 +359,46 @@ class SharedBrowserSessionManager:
             submit_selectors = ('button[type="submit"], input[type="submit"], '
                               'button:has-text("Login")')
             await page.click(submit_selectors)
+            
+            # Wait for navigation after login
             await page.wait_for_timeout(5000)
+            
+            # Check if we're still on login page (indicates failure)
+            current_url = page.url
+            if 'login' in current_url.lower():
+                print("❌ Still on login page, checking for errors...")
+                # Look for error messages
+                error_selectors = [
+                    '.error', '.alert-error', '[class*="error"]',
+                    '[class*="invalid"]', '.text-red-500'
+                ]
+                for selector in error_selectors:
+                    if await page.locator(selector).count() > 0:
+                        error_text = await page.locator(selector).text_content()
+                        print(f"❌ Login error: {error_text}")
+                        await page.close()
+                        return False
+            
+            # Force wait for cookies to be set
+            await page.wait_for_timeout(3000)
+            
+            # Save cookies immediately after login attempt
+            print("🔄 Capturing cookies immediately after login...")
+            await self._capture_and_save_cookies('huggingface')
             
             # Check if login was successful
             is_authenticated = await self.is_authenticated('huggingface')
             
             if is_authenticated:
+                # Save session state immediately after successful login
                 await self.save_session_state('huggingface')
                 print("✅ Hugging Face login successful")
+                
+                # Also save cookies separately for debugging
+                await self._debug_save_cookies('huggingface')
+            else:
+                print("❌ Login appeared to succeed but authentication check failed")
+                await self._debug_save_cookies('huggingface')
                 
             await page.close()
             return is_authenticated
@@ -368,3 +469,127 @@ class SharedBrowserSessionManager:
                     loop.create_task(self.cleanup_all())
             except Exception:
                 pass
+
+    async def _debug_save_cookies(self, service: str):
+        """Debug method to save cookies separately for troubleshooting"""
+        try:
+            if service not in self._contexts:
+                return
+            
+            # Get all cookies from the context
+            cookies = await self._contexts[service].cookies()
+            
+            # Save to debug file
+            if service == 'google_drive':
+                session_path = self.google_session_path
+            else:
+                session_path = self.huggingface_session_path
+            
+            debug_file = session_path / 'debug_cookies.json'
+            
+            with open(debug_file, 'w') as f:
+                json.dump(cookies, f, indent=2)
+            
+            print(f"🐛 Debug: Saved {len(cookies)} cookies for {service}")
+            
+            # Print important cookies for HuggingFace
+            if service == 'huggingface':
+                important_cookies = [
+                    'session', 'token', 'auth', 'user', 'csrf',
+                    'huggingface', 'hf_', '_hf'
+                ]
+                found_important = []
+                for cookie in cookies:
+                    cookie_name = cookie.get('name', '').lower()
+                    for important in important_cookies:
+                        if important in cookie_name:
+                            found_important.append(cookie.get('name'))
+                            break
+                
+                if found_important:
+                    print(f"🔑 Found important cookies: {found_important}")
+                else:
+                    print("⚠️ No important authentication cookies found")
+                    
+        except Exception as e:
+            print(f"⚠️ Failed to save debug cookies for {service}: {e}")
+    
+    async def _capture_and_save_cookies(self, service: str):
+        """Immediately capture and save cookies after login"""
+        try:
+            if service not in self._contexts:
+                print(f"⚠️ No context found for {service}")
+                return
+            
+            # Get fresh cookies from the context
+            fresh_cookies = await self._contexts[service].cookies()
+            
+            if service == 'google_drive':
+                session_path = self.google_session_path
+            else:
+                session_path = self.huggingface_session_path
+            
+            # Save cookies to session_state.json immediately
+            cookies_file = session_path / 'session_state.json'
+            cookie_data = {
+                'service': service,
+                'timestamp': str(asyncio.get_event_loop().time()),
+                'cookies': fresh_cookies,
+                'total_cookies': len(fresh_cookies),
+                'capture_type': 'immediate_post_login'
+            }
+            
+            with open(cookies_file, 'w') as f:
+                json.dump(cookie_data, f, indent=2)
+            
+            print(f"🚀 Immediately captured {len(fresh_cookies)} cookies for {service}")
+            
+            # Print important authentication cookies for debugging
+            if service == 'huggingface' and fresh_cookies:
+                auth_cookies = []
+                for cookie in fresh_cookies:
+                    name = cookie.get('name', '').lower()
+                    if any(key in name for key in ['session', 'token', 'auth', 'csrf', 'hf']):
+                        auth_cookies.append(cookie.get('name'))
+                
+                if auth_cookies:
+                    print(f"🔐 Found authentication cookies: {auth_cookies}")
+                else:
+                    print("⚠️ No obvious authentication cookies detected")
+                    
+        except Exception as e:
+            print(f"❌ Failed to capture cookies for {service}: {e}")
+
+    async def load_existing_cookies(self, service: str):
+        """Load existing cookies into the context if available"""
+        try:
+            if service not in self._contexts:
+                return False
+            
+            if service == 'google_drive':
+                session_path = self.google_session_path
+            else:
+                session_path = self.huggingface_session_path
+            
+            cookies_file = session_path / 'session_state.json'
+            
+            if not cookies_file.exists():
+                print(f"📄 No session_state.json found for {service}")
+                return False
+            
+            with open(cookies_file, 'r') as f:
+                cookie_data = json.load(f)
+            
+            cookies = cookie_data.get('cookies', [])
+            if not cookies:
+                print(f"🍪 No cookies found in session_state.json for {service}")
+                return False
+            
+            # Add cookies to the context
+            await self._contexts[service].add_cookies(cookies)
+            print(f"✅ Loaded {len(cookies)} cookies into {service} context")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Failed to load existing cookies for {service}: {e}")
+            return False

@@ -14,6 +14,7 @@ def setup_missing_models_routes(routes):
             data = await request.json()
             model_name = data.get('model_name')
             node_type = data.get('node_type')
+            field_name = data.get('field_name')  # Added field_name parameter
             session_id = data.get('session_id')
             
             if not model_name:
@@ -27,7 +28,8 @@ def setup_missing_models_routes(routes):
             loop.create_task(missing_model_handler.download_missing_model(
                 model_name=model_name,
                 node_type=node_type,
-                session_id=session_id
+                session_id=session_id,
+                field_name=field_name  # Pass field_name to the handler
             ))
             
             return web.json_response({

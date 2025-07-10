@@ -230,7 +230,29 @@ export class MissingModelsManager {
         try {
             const dialogContent = dialog.textContent || '';
             
+            // Enhanced pattern to capture node class information
             const fieldValuePattern = /(\w+):\s*['"]([^'"]*\.(safetensors|ckpt|pt|pth|bin))['"][^'"]*not\s+in\s*\[/gi;
+            
+            // Pattern to extract node class type from error messages
+            const nodeClassPattern = /(?:node\s+)?(\w+(?:Loader|Model|Checkpoint))\s*\(.*?\)/gi;
+            const nodeValidationPattern = /(\w+(?:Loader|Model|Checkpoint)).*?validation/gi;
+            
+            // Extract node class types from the error
+            const nodeClasses = new Set();
+            let nodeMatch;
+            
+            // Try different patterns to find node class
+            while ((nodeMatch = nodeClassPattern.exec(dialogContent)) !== null) {
+                nodeClasses.add(nodeMatch[1]);
+            }
+            
+            // Reset regex
+            nodeValidationPattern.lastIndex = 0;
+            while ((nodeMatch = nodeValidationPattern.exec(dialogContent)) !== null) {
+                nodeClasses.add(nodeMatch[1]);
+            }
+            
+            console.log(`🔍 Detected node classes from error: ${Array.from(nodeClasses).join(', ')}`);
             
             let match;
             while ((match = fieldValuePattern.exec(dialogContent)) !== null) {
@@ -240,19 +262,29 @@ export class MissingModelsManager {
                 
                 const baseName = fullModelName.replace(/\.(safetensors|ckpt|pt|pth|bin)$/i, '');
                 
+                // Try to find the specific node class for this field
+                let specificNodeType = null;
+                for (const nodeClass of nodeClasses) {
+                    if (this.isFieldCompatibleWithNode(fieldName, nodeClass)) {
+                        specificNodeType = nodeClass;
+                        break;
+                    }
+                }
+                
                 const { nodeType, category } = this.inferTypeFromFieldName(fieldName);
+                const finalNodeType = specificNodeType || nodeType;
                 
                 models.push({
                     name: fullModelName,
                     baseName: baseName,
                     category: category,
-                    nodeType: nodeType,
+                    nodeType: finalNodeType,  // Use the detected node class if available
                     fullPath: `${category}/${fullModelName}`,
                     fieldName: fieldName,
                     errorContext: `${fieldName} field validation error`
                 });
                 
-                console.log(`📝 Extracted model info: ${fullModelName} from field: ${fieldName} -> ${nodeType}/${category}`);
+                console.log(`📝 Extracted model info: ${fullModelName} from field: ${fieldName} -> ${finalNodeType}/${category}`);
             }
             
             // Fallback pattern
@@ -266,39 +298,21 @@ export class MissingModelsManager {
                     
                     const { nodeType, category } = this.inferTypeFromFileName(fullModelName);
                     
+                    // Use the first detected node class if available
+                    const finalNodeType = nodeClasses.size > 0 ? Array.from(nodeClasses)[0] : nodeType;
+                    
                     models.push({
                         name: fullModelName,
                         baseName: baseName,
                         category: category,
-                        nodeType: nodeType,
+                        nodeType: finalNodeType,
                         fullPath: `${category}/${fullModelName}`,
                         fieldName: 'unknown_field',
                         errorContext: 'File validation error'
                     });
                     
-                    console.log(`📝 Fallback extracted: ${fullModelName} -> ${nodeType}/${category}`);
+                    console.log(`📝 Fallback extracted: ${fullModelName} -> ${finalNodeType}/${category}`);
                 }
-            }
-            
-            // Additional context extraction
-            const nodeClassPattern = /(\w+Loader\w*|\w+Checkpoint\w*|\w+Model\w*):/gi;
-            let nodeMatch;
-            
-            while ((nodeMatch = nodeClassPattern.exec(dialogContent)) !== null) {
-                const nodeClassName = nodeMatch[1];
-                
-                models.forEach(model => {
-                    if (model.errorContext === 'File validation error') {
-                        model.errorContext = `${nodeClassName} validation error`;
-                        
-                        const refinedType = this.inferTypeFromNodeClass(nodeClassName);
-                        if (refinedType.nodeType !== 'checkpoint') {
-                            model.nodeType = refinedType.nodeType;
-                            model.category = refinedType.category;
-                            model.fullPath = `${refinedType.category}/${model.name}`;
-                        }
-                    }
-                });
             }
             
         } catch (error) {
@@ -306,6 +320,31 @@ export class MissingModelsManager {
         }
         
         return models;
+    }
+
+    isFieldCompatibleWithNode(fieldName, nodeClass) {
+        /**
+         * Determine if a field name is compatible with a specific node class
+         */
+        const fieldLower = fieldName.toLowerCase();
+        const nodeLower = nodeClass.toLowerCase();
+        
+        const compatibilityMap = {
+            'ckpt_name': ['checkpointloader', 'checkpointloadersimple'],
+            'checkpoint_name': ['checkpointloader', 'checkpointloadersimple'],
+            'model_name': ['checkpointloader', 'checkpointloadersimple'],
+            'vae_name': ['vaeloader'],
+            'lora_name': ['loraloader', 'loraloadermodelonly'],
+            'controlnet_name': ['controlnetloader', 'diffcontrolnetloader'],
+            'upscale_model': ['upscalemodelloader'],
+            'clip_name': ['cliploader', 'dualcliploader'],
+            'unet_name': ['unetloader'],
+            'style_model': ['stylemodelloader'],
+            'gligen': ['gligenloader']
+        };
+        
+        const compatibleNodes = compatibilityMap[fieldLower] || [];
+        return compatibleNodes.some(node => nodeLower.includes(node));
     }
 
     inferTypeFromFieldName(fieldName) {
@@ -491,6 +530,7 @@ export class MissingModelsManager {
                 body: JSON.stringify({
                     model_name: model.name,
                     node_type: model.nodeType,
+                    field_name: model.fieldName,  // Include field name for VAE disambiguation
                     session_id: sessionId
                 })
             });

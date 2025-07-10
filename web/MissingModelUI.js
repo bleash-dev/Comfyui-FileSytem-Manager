@@ -47,8 +47,9 @@ export class MissingModelUI {
                         <div class="error-text">
                             <h4>Workflow execution failed due to missing model${missingModels.length > 1 ? 's' : ''}</h4>
                             <p>
-                            We'll automatically search and download the required model${missingModels.length > 1 ? 's' : ''} From Community Repo, If it's not there, we will attempt from the internet (Hugging Face and CivitAI)
-                            If not available, you can <span class="manual-installation-span">install manually</span> directly in your directory of choice while installing from multiple sources.
+                            We'll automatically search and download the required model${missingModels.length > 1 ? 's' : ''} from Community Repo first. If not found there, we'll attempt from the internet (Hugging Face and CivitAI). 
+                            The model will be placed in the correct directory based on the node type (<span style="font-weight: bold; color: #007acc;">smart path detection</span>). 
+                            If unavailable, you can <span class="manual-installation-span">install manually</span> directly in your directory of choice while installing from multiple sources.
                             </p>
                         </div>
                     </div>
