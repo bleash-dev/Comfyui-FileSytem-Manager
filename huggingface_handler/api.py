@@ -8,6 +8,14 @@ from .downloader import HuggingFaceDownloader
 from .progress import ProgressTracker
 from ..shared_state import download_cancellation_flags
 
+# Import model config integration
+try:
+    from ..model_config_integration import model_config_manager
+    MODEL_CONFIG_AVAILABLE = True
+except ImportError:
+    print("Model config integration not available")
+    MODEL_CONFIG_AVAILABLE = False
+
 class HuggingFaceDownloadAPI:
     def __init__(self):
         self.utils = HuggingFaceUtils()
@@ -159,6 +167,18 @@ class HuggingFaceDownloadAPI:
                 final_file_path_abs.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(temp_file_path, final_file_path_abs)
                 ProgressTracker.update_progress(session_id, f"File moved to: {final_file_path_abs}", 95)
+                
+                # Register the model with the configuration manager
+                if MODEL_CONFIG_AVAILABLE:
+                    try:
+                        model_config_manager.register_huggingface_model(
+                            local_path=str(final_file_path_abs),
+                            repo_id=repo_id,
+                            filename=filename_in_repo
+                        )
+                        print(f"📝 Model registered in config: {final_file_path_abs}")
+                    except Exception as e:
+                        print(f"⚠️ Failed to register model in config: {e}")
                 
                 ProgressTracker.set_completed(session_id, f"File '{filename_in_repo}' downloaded successfully.")
                 return {"success": True, "message": f"File '{filename_in_repo}' downloaded.", "path": str(final_file_path_abs)}

@@ -36,6 +36,24 @@ from .civitai_handler import CivitAIDownloadAPI, civitai_progress_store
 # Import Direct Upload Handler
 from .direct_upload_handler import DirectUploadAPI, direct_upload_progress_store, direct_upload_cancellation_flags
 
+# Import Sync Manager Integration
+try:
+    from .sync_manager_integration import sync_manager_api
+    SYNC_MANAGER_AVAILABLE = True
+except ImportError:
+    print("Sync manager integration not available")
+    sync_manager_api = None
+    SYNC_MANAGER_AVAILABLE = False
+
+# Import Workflow Execution API
+try:
+    from .workflow_execution_api import workflow_execution_api
+    WORKFLOW_EXECUTION_AVAILABLE = True
+except ImportError:
+    print("Workflow execution API not available")
+    workflow_execution_api = None
+    WORKFLOW_EXECUTION_AVAILABLE = False
+
 # Import workflow monitor to register its endpoints
 try:
     from .workflow_monitor import workflow_monitor
@@ -806,6 +824,270 @@ if workflow_monitor:
     # For example, if it has a method like workflow_monitor.register_routes(PS.instance.routes)
     # This ensures encapsulation. For now, assuming it's done within its import or init.
     pass
+
+# --- Sync Manager Endpoints ---
+
+@PS.instance.routes.get("/filesystem/sync/status")
+async def get_sync_status_endpoint(request):
+    """Get current sync status"""
+    if not SYNC_MANAGER_AVAILABLE:
+        return web.json_response({
+            "success": False,
+            "error": "Sync manager not available"
+        }, status=503)
+    
+    try:
+        result = sync_manager_api.get_sync_status()
+        return web.json_response(result)
+    except Exception as e:
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+@PS.instance.routes.post("/filesystem/sync/unlock")
+async def force_unlock_sync_endpoint(request):
+    """Force unlock sync locks"""
+    if not SYNC_MANAGER_AVAILABLE:
+        return web.json_response({
+            "success": False,
+            "error": "Sync manager not available"
+        }, status=503)
+    
+    try:
+        data = await request.json()
+        sync_type = data.get('sync_type')  # Optional, None means unlock all
+        
+        result = sync_manager_api.force_unlock_sync(sync_type)
+        return web.json_response(result)
+    except Exception as e:
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+@PS.instance.routes.post("/filesystem/sync/test")
+async def test_sync_lock_endpoint(request):
+    """Test sync lock mechanism"""
+    if not SYNC_MANAGER_AVAILABLE:
+        return web.json_response({
+            "success": False,
+            "error": "Sync manager not available"
+        }, status=503)
+    
+    try:
+        data = await request.json()
+        sync_type = data.get('sync_type', 'test_sync')
+        
+        result = sync_manager_api.test_sync_lock(sync_type)
+        return web.json_response(result)
+    except Exception as e:
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+@PS.instance.routes.post("/filesystem/sync/run")
+async def run_sync_endpoint(request):
+    """Run a specific sync operation"""
+    if not SYNC_MANAGER_AVAILABLE:
+        return web.json_response({
+            "success": False,
+            "error": "Sync manager not available"
+        }, status=503)
+    
+    try:
+        data = await request.json()
+        sync_type = data.get('sync_type')
+        
+        if not sync_type:
+            return web.json_response({
+                "success": False,
+                "error": "sync_type is required"
+            }, status=400)
+        
+        # Run sync asynchronously to avoid blocking
+        result = await sync_manager_api.run_sync_async(sync_type)
+        return web.json_response(result)
+    except Exception as e:
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+@PS.instance.routes.post("/filesystem/sync/run_all")
+async def run_all_syncs_endpoint(request):
+    """Run all sync operations"""
+    if not SYNC_MANAGER_AVAILABLE:
+        return web.json_response({
+            "success": False,
+            "error": "Sync manager not available"
+        }, status=503)
+    
+    try:
+        # Run all syncs asynchronously
+        result = await sync_manager_api.run_all_syncs_async()
+        return web.json_response(result)
+    except Exception as e:
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+@PS.instance.routes.get("/filesystem/sync/list")
+async def list_sync_scripts_endpoint(request):
+    """List available sync scripts"""
+    if not SYNC_MANAGER_AVAILABLE:
+        return web.json_response({
+            "success": False,
+            "error": "Sync manager not available"
+        }, status=503)
+    
+    try:
+        result = sync_manager_api.list_sync_scripts()
+        return web.json_response(result)
+    except Exception as e:
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+@PS.instance.routes.get("/filesystem/sync/logs/{sync_type}")
+async def get_sync_logs_endpoint(request):
+    """Get logs for a specific sync type"""
+    if not SYNC_MANAGER_AVAILABLE:
+        return web.json_response({
+            "success": False,
+            "error": "Sync manager not available"
+        }, status=503)
+    
+    try:
+        sync_type = request.match_info['sync_type']
+        lines = int(request.query.get('lines', 20))
+        
+        result = sync_manager_api.get_sync_logs(sync_type, lines)
+        return web.json_response(result)
+    except Exception as e:
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+# --- Workflow Execution Endpoints ---
+
+@PS.instance.routes.post("/filesystem/workflow/execute")
+async def start_workflow_execution_endpoint(request):
+    """Start workflow execution"""
+    if not WORKFLOW_EXECUTION_AVAILABLE:
+        return web.json_response({
+            "success": False,
+            "error": "Workflow execution API not available"
+        }, status=503)
+    
+    try:
+        data = await request.json()
+        workflow_json = data.get('workflow')
+        client_id = data.get('client_id')
+        
+        if not workflow_json:
+            return web.json_response({
+                "success": False,
+                "error": "workflow is required"
+            }, status=400)
+        
+        result = await workflow_execution_api.start_workflow_execution(workflow_json, client_id)
+        return web.json_response(result)
+    except Exception as e:
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+@PS.instance.routes.get("/filesystem/workflow/status/{execution_id}")
+async def get_workflow_execution_status_endpoint(request):
+    """Get workflow execution status"""
+    if not WORKFLOW_EXECUTION_AVAILABLE:
+        return web.json_response({
+            "success": False,
+            "error": "Workflow execution API not available"
+        }, status=503)
+    
+    try:
+        execution_id = request.match_info['execution_id']
+        result = workflow_execution_api.get_execution_status(execution_id)
+        return web.json_response(result)
+    except Exception as e:
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+@PS.instance.routes.post("/filesystem/workflow/cancel")
+async def cancel_workflow_execution_endpoint(request):
+    """Cancel workflow execution"""
+    if not WORKFLOW_EXECUTION_AVAILABLE:
+        return web.json_response({
+            "success": False,
+            "error": "Workflow execution API not available"
+        }, status=503)
+    
+    try:
+        data = await request.json()
+        execution_id = data.get('execution_id')
+        
+        if not execution_id:
+            return web.json_response({
+                "success": False,
+                "error": "execution_id is required"
+            }, status=400)
+        
+        result = workflow_execution_api.cancel_execution(execution_id)
+        return web.json_response(result)
+    except Exception as e:
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+@PS.instance.routes.get("/filesystem/workflow/list")
+async def list_workflow_executions_endpoint(request):
+    """List recent workflow executions"""
+    if not WORKFLOW_EXECUTION_AVAILABLE:
+        return web.json_response({
+            "success": False,
+            "error": "Workflow execution API not available"
+        }, status=503)
+    
+    try:
+        limit = int(request.query.get('limit', 50))
+        result = workflow_execution_api.list_executions(limit)
+        return web.json_response(result)
+    except Exception as e:
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+@PS.instance.routes.post("/filesystem/workflow/cleanup")
+async def cleanup_workflow_executions_endpoint(request):
+    """Clean up old workflow execution records"""
+    if not WORKFLOW_EXECUTION_AVAILABLE:
+        return web.json_response({
+            "success": False,
+            "error": "Workflow execution API not available"
+        }, status=503)
+    
+    try:
+        data = await request.json()
+        max_age_hours = int(data.get('max_age_hours', 24))
+        
+        result = workflow_execution_api.cleanup_old_executions(max_age_hours)
+        return web.json_response(result)
+    except Exception as e:
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
 
 print("File System Manager API routes registered.")
 setup_missing_models_routes(PS.instance.routes)

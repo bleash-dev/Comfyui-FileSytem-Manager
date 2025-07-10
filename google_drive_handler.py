@@ -11,6 +11,14 @@ import folder_paths
 import torch  # Assuming torch might be needed for .pth validation
 from .shared_browser_session import SharedBrowserSessionManager
 
+# Import model config integration
+try:
+    from .model_config_integration import model_config_manager
+    MODEL_CONFIG_AVAILABLE = True
+except ImportError:
+    print("Model config integration not available")
+    MODEL_CONFIG_AVAILABLE = False
+
 # Global progress tracking
 progress_store = {}
 
@@ -315,6 +323,18 @@ class GoogleDriveDownloaderAPI:
                         success_message = f"PyTorch model downloaded but validation failed ({file_size} bytes)"
                 else:
                     success_message = f"Download completed successfully ({file_size} bytes)"
+                
+                # Register the model with the configuration manager
+                if MODEL_CONFIG_AVAILABLE:
+                    try:
+                        model_config_manager.register_google_drive_model(
+                            local_path=str(final_download_path),
+                            drive_url=google_drive_url,
+                            model_type=model_type
+                        )
+                        print(f"📝 Model registered in config: {final_download_path}")
+                    except Exception as e:
+                        print(f"⚠️ Failed to register model in config: {e}")
                 
                 combined_progress_callback("Download completed!", 100)
                 if session_id:

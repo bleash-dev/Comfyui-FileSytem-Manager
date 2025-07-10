@@ -4,6 +4,14 @@ from .downloader import CivitAIDownloader
 from .progress import ProgressTracker
 from ..shared_state import download_cancellation_flags
 
+# Import model config integration
+try:
+    from ..model_config_integration import model_config_manager
+    MODEL_CONFIG_AVAILABLE = True
+except ImportError:
+    print("Model config integration not available")
+    MODEL_CONFIG_AVAILABLE = False
+
 class CivitAIDownloadAPI:
     def __init__(self):
         self.utils = CivitAIUtils()

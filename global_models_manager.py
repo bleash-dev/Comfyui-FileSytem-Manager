@@ -15,6 +15,14 @@ except ImportError:
     BOTO3_AVAILABLE = False
     print("boto3 not available, falling back to AWS CLI")
 
+# Import model config integration
+try:
+    from .model_config_integration import model_config_manager
+    MODEL_CONFIG_AVAILABLE = True
+except ImportError:
+    print("Model config integration not available")
+    MODEL_CONFIG_AVAILABLE = False
+
 # Progress tracking for global model downloads
 global_models_progress_store = {}
 
@@ -259,6 +267,19 @@ class GlobalModelsManager:
                 if local_path.exists():
                     final_size = local_path.stat().st_size
                     print(f"✅ Download complete: {model_path} ({final_size} bytes)")
+                
+                # Register the model with the configuration manager
+                if MODEL_CONFIG_AVAILABLE:
+                    try:
+                        model_config_manager.register_s3_model(
+                            local_path=str(local_path),
+                            s3_path=s3_full_path,
+                            model_name=filename,
+                            model_type=category
+                        )
+                        print(f"📝 Model registered in config: {model_path}")
+                    except Exception as e:
+                        print(f"⚠️ Failed to register model in config: {e}")
                 
                 # Mark as completed with success message
                 global_models_progress_store[model_path] = {

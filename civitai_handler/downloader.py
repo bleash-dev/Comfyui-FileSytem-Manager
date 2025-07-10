@@ -7,6 +7,14 @@ from .utils import CivitAIUtils
 from .progress import ProgressTracker
 from ..shared_state import download_cancellation_flags
 
+# Import model config integration
+try:
+    from ..model_config_integration import model_config_manager
+    MODEL_CONFIG_AVAILABLE = True
+except ImportError:
+    print("Model config integration not available")
+    MODEL_CONFIG_AVAILABLE = False
+
 class CivitAIDownloader:
     def __init__(self):
         self.utils = CivitAIUtils()
@@ -253,6 +261,20 @@ class CivitAIDownloader:
                     # Move from temp to final location
                     final_path.parent.mkdir(parents=True, exist_ok=True)
                     Path(temp_path).rename(final_path)
+                    
+                    # Register the model with the configuration manager
+                    if MODEL_CONFIG_AVAILABLE:
+                        try:
+                            # Extract model info for registration
+                            model_config_manager.register_civitai_model(
+                                local_path=str(final_path),
+                                model_id=model_id,
+                                version_id=version_id,
+                                direct_url=direct_download_url if direct_download_url else None
+                            )
+                            print(f"📝 Model registered in config: {final_path}")
+                        except Exception as e:
+                            print(f"⚠️ Failed to register model in config: {e}")
                     
                     success_message = f"Downloaded {final_filename} ({self.utils.format_file_size(downloaded_size)})"
                     ProgressTracker.set_completed(session_id, success_message)

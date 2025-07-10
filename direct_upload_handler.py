@@ -7,6 +7,14 @@ from pathlib import Path
 from urllib.parse import urlparse
 import folder_paths
 
+# Import model config integration
+try:
+    from .model_config_integration import model_config_manager
+    MODEL_CONFIG_AVAILABLE = True
+except ImportError:
+    print("Model config integration not available")
+    MODEL_CONFIG_AVAILABLE = False
+
 # Global progress tracking for direct uploads
 direct_upload_progress_store = {}
 
@@ -285,6 +293,17 @@ class DirectUploadDownloader:
                     final_path.unlink()
                 
                 Path(temp_path).rename(final_path)
+                
+                # Register the model with the configuration manager
+                if MODEL_CONFIG_AVAILABLE:
+                    try:
+                        model_config_manager.register_direct_url_model(
+                            local_path=str(final_path),
+                            url=url
+                        )
+                        print(f"📝 Model registered in config: {final_path}")
+                    except Exception as e:
+                        print(f"⚠️ Failed to register model in config: {e}")
                 
                 success_message = f"Downloaded {filename} ({self.utils.format_file_size(downloaded_size)})"
                 DirectUploadProgressTracker.set_completed(session_id, success_message)
