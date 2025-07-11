@@ -29,28 +29,26 @@ class SyncManagerAPI:
         """Run a sync manager command"""
         try:
             # Build the full command
-            full_command = f"bash {self.script_path} {command}"
-            
+            full_command = ["bash", self.script_path, command]
+
             result = subprocess.run(
                 full_command,
-                shell=True,
                 capture_output=True,
                 text=True,
                 timeout=timeout
             )
-            
+
             success = result.returncode == 0
             stdout = result.stdout.strip()
             stderr = result.stderr.strip()
-            
+
             if success:
                 logger.debug(f"Sync command succeeded: {command}")
             else:
-                logger.error(f"Sync command failed: {command}, "
-                             f"stderr: {stderr}")
-            
+                logger.error(f"Sync command failed: {command}, stderr: {stderr}")
+
             return success, stdout, stderr
-                
+                            
         except subprocess.TimeoutExpired:
             logger.error(f"Sync command timed out: {command}")
             return False, "", "Command timed out"

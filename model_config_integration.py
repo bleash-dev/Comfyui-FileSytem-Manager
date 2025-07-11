@@ -96,8 +96,7 @@ class ModelConfigManager:
             # Source the script and run the command
             full_command = f"source {self.script_path} && {command}"
             result = subprocess.run(
-                full_command,
-                shell=True,
+                ['bash', '-c', full_command],
                 capture_output=True,
                 text=True,
                 timeout=30

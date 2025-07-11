@@ -5,7 +5,7 @@ import tempfile
 import shutil
 import asyncio
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, Any
 from urllib.parse import unquote
 import folder_paths
 from server import PromptServer as PS
