@@ -121,7 +121,8 @@ class ModelConfigManager:
     def register_s3_model(self, local_path: str, s3_path: str,
                           model_name: str = None,
                           model_type: str = None,
-                          download_link: str = None) -> bool:
+                          download_link: str = None,
+                          sym_linked_from: str = None) -> bool:
         """Register a model downloaded from S3"""
         try:
             group = self._determine_model_group(local_path, model_type)
@@ -137,6 +138,7 @@ class ModelConfigManager:
                 "localPath": local_path,
                 "modelName": model_name,
                 "directoryGroup": group,
+                "downloadLink": s3_path,
                 "downloadSource": "s3"
             }
             
@@ -145,6 +147,8 @@ class ModelConfigManager:
                 model_object["modelSize"] = file_size
             if download_link:
                 model_object["downloadLink"] = download_link
+            if sym_linked_from:
+                model_object["symLinkedFrom"] = sym_linked_from
             
             # Convert to JSON string
             model_json = json.dumps(model_object)

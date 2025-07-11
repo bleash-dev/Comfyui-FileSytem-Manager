@@ -21,6 +21,16 @@ except ImportError:
     GLOBAL_MODELS_AVAILABLE = False
     print("⚠️ Global models manager not available")
 
+# Import model config manager
+try:
+    from .model_config_integration import model_config_manager
+    MODEL_CONFIG_AVAILABLE = True
+    print("✅ Model config manager available for registration")
+except ImportError:
+    MODEL_CONFIG_AVAILABLE = False
+    model_config_manager = None
+    print("⚠️ Model config manager not available")
+
 # Add Google API import
 try:
     from googleapi import google
@@ -162,6 +172,45 @@ class MissingModelHandler:
         
         # Default fallback
         return "models/checkpoints"
+
+    def _determine_model_type_from_path(self, directory_path: str) -> str:
+        """Determine model type from the target directory path.
+        
+        Extracts the directory immediately after 'models/' in the path.
+        Falls back to keyword-based detection if path structure doesn't match.
+        """
+        from pathlib import Path
+        
+        # Normalize the path
+        path = Path(directory_path)
+        parts = [part.lower() for part in path.parts]
+        
+        # Try to find 'models' in the path and get the next directory
+        try:
+            models_index = parts.index('models')
+            if models_index + 1 < len(parts):
+                model_type = parts[models_index + 1]
+                # Map common variations to standard types
+                type_mapping = {
+                    'checkpoints': 'checkpoint',
+                    'loras': 'lora',
+                    'lora': 'lora',
+                    'vae': 'vae',
+                    'controlnet': 'controlnet',
+                    'embeddings': 'embedding',
+                    'upscale_models': 'upscale',
+                    'upscale': 'upscale',
+                    'clip': 'clip',
+                    'unet': 'unet',
+                    'ipadapter': 'ipadapter',
+                    'clip_vision': 'clip_vision',
+                    'style_models': 'style_models',
+                    'diffusers': 'diffusers'
+                }
+                return type_mapping.get(model_type, model_type)
+        except ValueError:
+            # 'models' not found in path, fall back to keyword detection
+            return model_type
 
     async def duckduckgo_search(self, query: str) -> List[str]:
         """
@@ -627,6 +676,24 @@ class MissingModelHandler:
                         symlink_path.symlink_to(s3_local_path)
                         print(f"✅ Created symlink: {symlink_path} -> {s3_local_path}")
                         final_path = symlink_path
+                        
+                        # Register the symlinked model in local model-configs.json
+                        if MODEL_CONFIG_AVAILABLE and model_config_manager:
+                            try:
+                                model_type = self._determine_model_type_from_path(actual_target_directory)
+                                registration_success = model_config_manager.register_s3_model(
+                                    local_path=str(symlink_path),
+                                    s3_path=s3_path,
+                                    model_name=global_result['filename'],
+                                    model_type=model_type,
+                                    sym_linked_from=str(s3_local_path)
+                                )
+                                if registration_success:
+                                    print(f"✅ Registered symlinked model in config: {symlink_path}")
+                                else:
+                                    print(f"⚠️ Failed to register symlinked model in config: {symlink_path}")
+                            except Exception as reg_error:
+                                print(f"⚠️ Error registering symlinked model: {reg_error}")
                         
                     except Exception as symlink_error:
                         print(f"⚠️ Failed to create symlink: {symlink_error}")
