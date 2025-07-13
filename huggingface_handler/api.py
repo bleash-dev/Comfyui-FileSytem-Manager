@@ -287,9 +287,40 @@ class HuggingFaceDownloadAPI:
                 except Exception as cleanup_error:
                     print(f"⚠️ Failed to clean up repository cache {repo_snapshot_cache_path}: {cleanup_error}")
                 
-                ProgressTracker.update_progress(session_id, f"Repository '{repo_name}' copied to: {repo_target_dir}", 95)
-                ProgressTracker.set_completed(session_id, f"Repository '{repo_name}' downloaded successfully.")
-                return {"success": True, "message": f"Repository '{repo_name}' downloaded.", "path": str(repo_target_dir)}
+                # Register the downloaded repository in model config
+                if MODEL_CONFIG_AVAILABLE:
+                    try:
+                        msg = "Registering repository models in config..."
+                        ProgressTracker.update_progress(session_id, msg, 96)
+                        registered_count = (
+                            model_config_manager.register_huggingface_repo(
+                                repo_path=str(repo_target_dir),
+                                repo_id=repo_id,
+                                source_url=hf_url
+                            )
+                        )
+                        print(f"✅ Registered {registered_count} models from "
+                              f"repository '{repo_name}' in model config")
+                        reg_msg = (f"Registered {registered_count} models "
+                                   f"from repository")
+                        ProgressTracker.update_progress(
+                            session_id, reg_msg, 98)
+                    except Exception as e:
+                        print(f"⚠️ Failed to register repository models in "
+                              f"config: {e}")
+                        # Don't fail the download if registration fails
+                
+                copy_msg = (f"Repository '{repo_name}' copied to: "
+                            f"{repo_target_dir}")
+                ProgressTracker.update_progress(session_id, copy_msg, 99)
+                complete_msg = (f"Repository '{repo_name}' downloaded "
+                                f"successfully.")
+                ProgressTracker.set_completed(session_id, complete_msg)
+                return {
+                    "success": True,
+                    "message": f"Repository '{repo_name}' downloaded.",
+                    "path": str(repo_target_dir)
+                }
 
         except (EntryNotFoundError, RepositoryNotFoundError) as e:
             error_msg = f"Hugging Face error: {str(e)}"
