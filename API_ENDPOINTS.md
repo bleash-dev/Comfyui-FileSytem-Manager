@@ -60,7 +60,7 @@ This document lists all the available REST API endpoints for the ComfyUI File Sy
 
 ## Model Configuration
 
-All download handlers automatically register downloaded models in the central model configuration (`model-configs.json`). This includes:
+All download handlers automatically register downloaded models in the central model configuration (`models_config.json`). This includes:
 
 - **S3 Downloads**: Registered with S3 source information
 - **HuggingFace Downloads**: Individual files and complete repositories

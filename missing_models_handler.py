@@ -677,7 +677,7 @@ class MissingModelHandler:
                         print(f"✅ Created symlink: {symlink_path} -> {s3_local_path}")
                         final_path = symlink_path
                         
-                        # Register the symlinked model in local model-configs.json
+                        # Register the symlinked model in local models_config.json
                         if MODEL_CONFIG_AVAILABLE and model_config_manager:
                             try:
                                 model_type = self._determine_model_type_from_path(actual_target_directory)
