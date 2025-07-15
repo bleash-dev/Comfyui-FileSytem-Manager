@@ -1,6 +1,7 @@
 import { app } from "../../scripts/app.js";
 import { FileSystemManager } from "./FileSystemManager.js";
 import { MissingModelsManager } from "./MissingModelsManager.js";
+import "./InitialModelSync.js";
 import "./styles.js";
 
 // Create global instances

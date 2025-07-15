@@ -233,7 +233,11 @@ class GlobalModelsManager:
             }
 
             # Mark this download as active for cancellation tracking
-            self.active_downloads[model_path] = {"cancelled": False}
+            self.active_downloads[model_path] = {
+                "cancelled": False,
+                "local_path": str(local_path),
+                "expected_size": total_size
+            }
 
             print(f"🚀 Starting download: {model_path} ({total_size} bytes)")
 
@@ -490,15 +494,57 @@ class GlobalModelsManager:
             await asyncio.sleep(0.5)  # Check every 500ms
 
     async def cancel_download(self, model_path):
-        """Cancel an active download"""
+        """Cancel an active download and clean up destination file if needed"""
         if model_path in self.active_downloads:
             print(f"🚫 Cancelling download for {model_path}")
-            self.active_downloads[model_path]["cancelled"] = True
+            download_info = self.active_downloads[model_path]
+            download_info["cancelled"] = True
+            
+            # Get local file info for cleanup
+            local_path_str = download_info.get("local_path")
+            expected_size = download_info.get("expected_size", 0)
+            
+            # Clean up destination file if it exists and matches expected size
+            if local_path_str:
+                try:
+                    from pathlib import Path
+                    local_path = Path(local_path_str)
+                    
+                    if local_path.exists():
+                        current_size = local_path.stat().st_size
+                        
+                        # Delete if file size equals expected size (complete download)
+                        # or if we have a partial download that we want to clean up
+                        # Only clean up if reasonable size or partial content
+                        should_cleanup = False
+                        cleanup_reason = ""
+                        
+                        if expected_size > 0 and current_size == expected_size:
+                            should_cleanup = True
+                            cleanup_reason = "completed download"
+                        elif current_size > 0:
+                            should_cleanup = True
+                            cleanup_reason = "partial download"
+                        
+                        if should_cleanup:
+                            local_path.unlink()
+                            size_info = f"({current_size} bytes)"
+                            if expected_size > 0:
+                                size_info += f" of {expected_size} expected"
+                            print(f"🗑️ Removed {cleanup_reason} file: "
+                                  f"{local_path.name} {size_info}")
+                        
+                except Exception as e:
+                    print(f"Error cleaning up cancelled download file: {e}")
             
             # Update progress store with cancellation message
             if model_path in global_models_progress_store:
-                global_models_progress_store[model_path]["status"] = "cancelled"
-                global_models_progress_store[model_path]["message"] = "🚫 Download cancelled - Click retry to restart"
+                store = global_models_progress_store[model_path]
+                store["status"] = "cancelled"
+                store["message"] = "🚫 Download cancelled - Click retry"
+            
+            # Clean up active download tracking after cancellation
+            del self.active_downloads[model_path]
             
             return True
         return False

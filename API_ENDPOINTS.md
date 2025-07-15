@@ -51,6 +51,95 @@ This document lists all the available REST API endpoints for the ComfyUI File Sy
 ### Legacy Sync
 - `POST /filesystem/sync_new_model` - Legacy sync new model endpoint
 
+## Initial Models Sync Endpoints
+
+### Initial Sync Management
+- `GET /filesystem/initial_sync/should_show` - Check if initial sync dialog should be shown
+- `GET /filesystem/initial_sync/models` - Get list of models that need initial sync
+- `POST /filesystem/initial_sync/start` - Start downloading selected models
+- `GET /filesystem/initial_sync/progress` - Get current sync progress
+- `POST /filesystem/initial_sync/cancel` - Cancel sync downloads
+- `POST /filesystem/initial_sync/remove_model` - Remove model from configuration
+- `POST /filesystem/initial_sync/mark_completed` - Mark initial sync as completed
+
+#### Initial Sync Request/Response Examples
+
+**Get Models for Sync**
+```bash
+GET /filesystem/initial_sync/models
+```
+Response:
+```json
+{
+    "success": true,
+    "models": {
+        "checkpoints": {
+            "model1.safetensors": {
+                "modelName": "model1.safetensors",
+                "originalS3Path": "s3://bucket/path/model1.safetensors",
+                "localPath": "/ComfyUI/models/checkpoints/model1.safetensors",
+                "modelSize": 1234567890,
+                "directoryGroup": "checkpoints",
+                "downloadSource": "s3",
+                "status": "pending"
+            }
+        }
+    },
+    "totalModels": 1,
+    "totalSize": 1234567890,
+    "formattedSize": "1.2 GB"
+}
+```
+
+**Start Sync Download**
+```bash
+POST /filesystem/initial_sync/start
+Content-Type: application/json
+
+{
+    "models": [
+        {
+            "modelName": "model1.safetensors",
+            "originalS3Path": "s3://bucket/path/model1.safetensors",
+            "localPath": "/ComfyUI/models/checkpoints/model1.safetensors",
+            "modelSize": 1234567890,
+            "directoryGroup": "checkpoints"
+        }
+    ]
+}
+```
+
+**Get Sync Progress**
+```bash
+GET /filesystem/initial_sync/progress
+```
+Response:
+```json
+{
+    "success": true,
+    "progress": {
+        "checkpoints": {
+            "model1.safetensors": {
+                "totalSize": 1234567890,
+                "localPath": "/ComfyUI/models/checkpoints/model1.safetensors",
+                "downloaded": 123456789,
+                "status": "progress",
+                "lastUpdated": "2025-07-14T10:30:45.123Z"
+            }
+        }
+    },
+    "summary": {
+        "totalModels": 1,
+        "completedModels": 0,
+        "totalSize": 1234567890,
+        "downloadedSize": 123456789,
+        "overallProgress": 10.0,
+        "formattedTotalSize": "1.2 GB",
+        "formattedDownloadedSize": "123 MB"
+    }
+}
+```
+
 ## Workflow Execution Endpoints
 
 ### Workflow Management

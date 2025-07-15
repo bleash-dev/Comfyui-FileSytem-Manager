@@ -62,6 +62,15 @@ except ImportError:
     print("Workflow monitor not available")
     workflow_monitor = None
 
+# Import Initial Models Sync System
+try:
+    from .initial_models_sync import initial_sync_manager
+    INITIAL_SYNC_AVAILABLE = True
+except ImportError:
+    print("Initial models sync system not available")
+    initial_sync_manager = None
+    INITIAL_SYNC_AVAILABLE = False
+
 
 class FileSystemManagerAPI:
     def __init__(self):
@@ -306,7 +315,6 @@ class FileSystemManagerAPI:
                   # We should not allow creating arbitrary folders at ComfyUI base.
                   # The creation should happen *within* one of the allowed_directories.
                   # So, if relative_path is empty, client must select a root first.
-                  # If relative_path is "models", target is "models/directory_name".
                 if not relative_path: # Disallow creation at true ComfyUI root from FSM root view
                      return {"success": False, "error": "Cannot create directory at the ComfyUI root. Select a base folder like 'models' or 'input' first."}
                 # If relative_path points to an allowed root key (e.g. "models"), then base_create_path is already set.
@@ -1090,4 +1098,168 @@ async def cleanup_workflow_executions_endpoint(request):
         }, status=500)
 
 print("File System Manager API routes registered.")
+setup_missing_models_routes(PS.instance.routes)
+
+# =============================================================================
+# INITIAL MODELS SYNC ENDPOINTS
+# =============================================================================
+
+
+@PS.instance.routes.get("/filesystem/initial_sync/should_show")
+async def should_show_initial_sync(request):
+    """Check if initial sync dialog should be shown and get models"""
+    if not INITIAL_SYNC_AVAILABLE:
+        return web.json_response({
+            "shouldShow": False,
+            "error": "Initial sync system not available"
+        })
+    
+    try:
+        result = await initial_sync_manager.should_show_initial_sync()
+        return web.json_response(result)
+    except Exception as e:
+        return web.json_response({
+            "shouldShow": False,
+            "error": str(e)
+        }, status=500)
+
+
+@PS.instance.routes.get("/filesystem/initial_sync/models")
+async def get_initial_sync_models(request):
+    """Get list of models that need initial sync"""
+    if not INITIAL_SYNC_AVAILABLE:
+        return web.json_response({
+            "success": False,
+            "error": "Initial sync system not available"
+        }, status=503)
+    
+    try:
+        result = await initial_sync_manager.get_initial_models_list()
+        return web.json_response(result)
+    except Exception as e:
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+
+@PS.instance.routes.post("/filesystem/initial_sync/start")
+async def start_initial_sync(request):
+    """Start downloading selected models"""
+    if not INITIAL_SYNC_AVAILABLE:
+        return web.json_response({
+            "success": False,
+            "error": "Initial sync system not available"
+        }, status=503)
+    
+    try:
+        data = await request.json()
+        models = data.get('models', [])
+        
+        if not models:
+            return web.json_response({
+                "success": False,
+                "error": "No models specified"
+            }, status=400)
+        
+        result = await initial_sync_manager.start_sync_download(models)
+        return web.json_response(result)
+    except Exception as e:
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+
+@PS.instance.routes.get("/filesystem/initial_sync/progress")
+async def get_initial_sync_progress(request):
+    """Get current sync progress"""
+    if not INITIAL_SYNC_AVAILABLE:
+        return web.json_response({
+            "success": False,
+            "error": "Initial sync system not available"
+        }, status=503)
+    
+    try:
+        result = await initial_sync_manager.get_sync_progress()
+        return web.json_response(result)
+    except Exception as e:
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+
+@PS.instance.routes.post("/filesystem/initial_sync/cancel")
+async def cancel_initial_sync(request):
+    """Cancel sync downloads"""
+    if not INITIAL_SYNC_AVAILABLE:
+        return web.json_response({
+            "success": False,
+            "error": "Initial sync system not available"
+        }, status=503)
+    
+    try:
+        data = await request.json() if request.content_length else {}
+        model_path = data.get('model_path')
+        
+        result = await initial_sync_manager.cancel_sync(model_path)
+        return web.json_response(result)
+    except Exception as e:
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+
+@PS.instance.routes.post("/filesystem/initial_sync/remove_model")
+async def remove_model_from_initial_sync(request):
+    """Remove model from configuration"""
+    if not INITIAL_SYNC_AVAILABLE:
+        return web.json_response({
+            "success": False,
+            "error": "Initial sync system not available"
+        }, status=503)
+    
+    try:
+        data = await request.json()
+        model_path = data.get('model_path')
+        
+        if not model_path:
+            return web.json_response({
+                "success": False,
+                "error": "Model path is required"
+            }, status=400)
+        
+        result = await initial_sync_manager.remove_model_from_config(
+            model_path)
+        return web.json_response(result)
+    except Exception as e:
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+
+@PS.instance.routes.post("/filesystem/initial_sync/mark_completed")
+async def mark_initial_sync_completed(request):
+    """Mark initial sync as completed"""
+    if not INITIAL_SYNC_AVAILABLE:
+        return web.json_response({
+            "success": False,
+            "error": "Initial sync system not available"
+        }, status=503)
+    
+    try:
+        result = await initial_sync_manager.skip_initial_sync()
+        return web.json_response(result)
+    except Exception as e:
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+
+print("File System Manager API routes registered.")
+print("Initial Models Sync API routes registered.")
 setup_missing_models_routes(PS.instance.routes)
