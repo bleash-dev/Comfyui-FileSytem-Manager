@@ -52,12 +52,25 @@ class WorkflowMonitor:
         
     def _get_model_categories(self) -> List[str]:
         """Get all model categories from folder_paths"""
-        # Standard ComfyUI model folders
+        # Standard ComfyUI model folders based on folder_paths.py and nodes.py
         standard_categories = [
-            'checkpoints', 'vae', 'loras', 'controlnet', 'clip_vision',
-            'style_models', 'embeddings', 'diffusers', 'unet', 'gligen',
-            'upscale_models', 'custom_nodes', 'hypernetworks', 'photomaker',
-            'clip', 'diffusion_models', 'vae_approx', 'text_encoders', 'sonic'
+            # Core ComfyUI model directories from folder_paths.py
+            'checkpoints', 'configs', 'loras', 'vae', 'vae_approx',
+            'text_encoders', 'diffusion_models', 'clip_vision',
+            'style_models', 'embeddings', 'diffusers', 'controlnet',
+            'gligen', 'upscale_models', 'hypernetworks', 'photomaker',
+            'classifiers',
+            
+            # Legacy/alternate names for compatibility
+            'clip', 'unet', 't2i_adapter',
+            
+            # Common custom node model directories
+            'ipadapter', 'animatediff', 'insightface', 'instantid',
+            'inpaint', 'segmentation', 'depth_estimation',
+            'pose_estimation', 'video_models', 'audio_models',
+            
+            # System directories
+            'custom_nodes', 'sonic', 'other'
         ]
 
         # Add from folder_paths if available

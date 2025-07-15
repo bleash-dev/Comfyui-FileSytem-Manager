@@ -416,11 +416,23 @@ export class FileSystemManager {
         this.activeContextMenu.itemPath = item.path;
 
         const actions = [];
-        actions.push({ id: 'rename', label: 'Rename', icon: '✏️' });
-        if (item.type === 'file') {
-            actions.push({ id: 'download', label: 'Download', icon: '⬇️' });
+        
+        // Symlinks have limited actions
+        if (item.is_symlink) {
+            // Only allow deletion for symlinks
+            actions.push({ id: 'delete', label: 'Delete Symlink', icon: '🗑️' });
+        } else {
+            actions.push({ id: 'rename', label: 'Rename', icon: '✏️' });
+            if (item.type === 'file') {
+                actions.push({ id: 'download', label: 'Download', icon: '⬇️' });
+                
+                // Add symlink option for files in models directory
+                if (item.path.startsWith('models/') && item.local_exists) {
+                    actions.push({ id: 'create_symlink', label: 'Create Symlink', icon: '🔗' });
+                }
+            }
+            actions.push({ id: 'delete', label: 'Delete', icon: '🗑️' });
         }
-        actions.push({ id: 'delete', label: 'Delete', icon: '🗑️' });
 
         const menu = UIComponents.createItemContextMenu(actions, (actionId) => {
             this.handleContextMenuAction(actionId, item);
@@ -464,6 +476,9 @@ export class FileSystemManager {
                     await this.downloadSingleFile(item.path);
                 }
                 break;
+            case 'create_symlink':
+                await this.showSymlinkDialog(item);
+                break;
             default:
                 console.warn('Unknown context menu action:', actionId);
         }
@@ -480,7 +495,14 @@ export class FileSystemManager {
     async deleteSingleItem(item) {
         if (!this.modal) return;
         UIComponents.showMessage(this.modal, ''); 
-        const confirmMessage = `Are you sure you want to delete "${item.name}"? This action cannot be undone.`;
+        
+        // Check if this is a file that might have symlinks pointing to it
+        let confirmMessage = `Are you sure you want to delete "${item.name}"? This action cannot be undone.`;
+        
+        // Add warning for non-symlink files that might have symlinks pointing to them
+        if (item.type === 'file' && !item.is_symlink) {
+            confirmMessage += '\n\nNote: If any symlinks point to this file, they will also be deleted automatically.';
+        }
         
         const result = await Dialog.show({
             title: "Confirm Delete",
@@ -1044,7 +1066,438 @@ export class FileSystemManager {
         }
     }
 
-    startGlobalModelsMonitoring() {
+    async showSymlinkDialog(sourceItem) {
+        if (!this.modal) return;
+        
+        // Create symlink dialog
+        const dialog = document.createElement('div');
+        dialog.className = 'fs-symlink-dialog-overlay';
+        
+        dialog.innerHTML = `
+            <div class="fs-symlink-dialog">
+                <div class="fs-symlink-header">
+                    <h3>Create Symlink</h3>
+                    <button class="fs-symlink-close">×</button>
+                </div>
+                <div class="fs-symlink-content">
+                    <div class="fs-symlink-source">
+                        <label>Source File:</label>
+                        <div class="fs-symlink-source-path">${sourceItem.name}</div>
+                        <div class="fs-symlink-source-full">${sourceItem.path}</div>
+                    </div>
+                    <div class="fs-symlink-target">
+                        <label>Target Directory:</label>
+                        <div class="fs-symlink-browser">
+                            <div class="fs-symlink-breadcrumb">
+                                <span class="fs-breadcrumb-item" data-path="models">models</span>
+                            </div>
+                            <div class="fs-symlink-contents"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="fs-symlink-actions">
+                    <button class="fs-symlink-cancel">Cancel</button>
+                    <button class="fs-symlink-create" disabled>Create Symlink</button>
+                </div>
+            </div>
+        `;
+        
+        // Add styles
+        this.addSymlinkDialogStyles();
+        
+        // Add event listeners
+        const closeBtn = dialog.querySelector('.fs-symlink-close');
+        const cancelBtn = dialog.querySelector('.fs-symlink-cancel');
+        const createBtn = dialog.querySelector('.fs-symlink-create');
+        
+        const closeDialog = () => {
+            document.body.removeChild(dialog);
+        };
+        
+        closeBtn.addEventListener('click', closeDialog);
+        cancelBtn.addEventListener('click', closeDialog);
+        createBtn.addEventListener('click', async () => {
+            await this.createSymlink(sourceItem, this.selectedTargetPath);
+            closeDialog();
+        });
+        
+        // Close on backdrop click
+        dialog.addEventListener('click', (e) => {
+            if (e.target === dialog) closeDialog();
+        });
+        
+        document.body.appendChild(dialog);
+        
+        // Initialize with models directory
+        this.selectedTargetPath = 'models';
+        await this.loadSymlinkDirectoryContents('models', dialog);
+    }
+
+    async loadSymlinkDirectoryContents(path, dialog) {
+        try {
+            const response = await fetch(`/filesystem/browse?path=${encodeURIComponent(path)}`);
+            const result = await response.json();
+            
+            if (!result.success) {
+                throw new Error(result.error);
+            }
+            
+            const contentsDiv = dialog.querySelector('.fs-symlink-contents');
+            contentsDiv.innerHTML = '';
+            
+            // Filter to show only directories in models
+            const directories = result.contents.filter(item => 
+                item.type === 'directory' && 
+                (item.local_exists || item.global_exists)
+            );
+            
+            directories.forEach(item => {
+                const dirItem = document.createElement('div');
+                dirItem.className = 'fs-symlink-dir-item';
+                dirItem.innerHTML = `
+                    <span class="fs-symlink-dir-icon">📁</span>
+                    <span class="fs-symlink-dir-name">${item.name}</span>
+                `;
+                
+                dirItem.addEventListener('click', async () => {
+                    // Remove selection from other items
+                    contentsDiv.querySelectorAll('.fs-symlink-dir-item').forEach(el => 
+                        el.classList.remove('selected'));
+                    
+                    if (item.local_exists) {
+                        // Navigate to subdirectory
+                        const newPath = `${path}/${item.name}`;
+                        this.updateSymlinkBreadcrumb(newPath, dialog);
+                        await this.loadSymlinkDirectoryContents(newPath, dialog);
+                    } else {
+                        // Can't navigate to non-local directory, but can select it
+                        dirItem.classList.add('selected');
+                        this.selectedTargetPath = item.path;
+                        dialog.querySelector('.fs-symlink-create').disabled = false;
+                    }
+                });
+                
+                dirItem.addEventListener('dblclick', () => {
+                    if (item.local_exists) {
+                        // Select this directory as target
+                        contentsDiv.querySelectorAll('.fs-symlink-dir-item').forEach(el => 
+                            el.classList.remove('selected'));
+                        dirItem.classList.add('selected');
+                        this.selectedTargetPath = item.path;
+                        dialog.querySelector('.fs-symlink-create').disabled = false;
+                    }
+                });
+                
+                contentsDiv.appendChild(dirItem);
+            });
+            
+            // Add "Select Current Directory" option
+            const selectCurrentBtn = document.createElement('div');
+            selectCurrentBtn.className = 'fs-symlink-select-current';
+            selectCurrentBtn.innerHTML = `
+                <span class="fs-symlink-dir-icon">📍</span>
+                <span class="fs-symlink-dir-name">Select "${path}"</span>
+            `;
+            
+            selectCurrentBtn.addEventListener('click', () => {
+                contentsDiv.querySelectorAll('.fs-symlink-dir-item, .fs-symlink-select-current').forEach(el => 
+                    el.classList.remove('selected'));
+                selectCurrentBtn.classList.add('selected');
+                this.selectedTargetPath = path;
+                dialog.querySelector('.fs-symlink-create').disabled = false;
+            });
+            
+            contentsDiv.appendChild(selectCurrentBtn);
+            
+        } catch (error) {
+            console.error('Error loading symlink directory contents:', error);
+            dialog.querySelector('.fs-symlink-contents').innerHTML = 
+                `<div class="fs-error">Error loading directory: ${error.message}</div>`;
+        }
+    }
+
+    updateSymlinkBreadcrumb(path, dialog) {
+        const breadcrumb = dialog.querySelector('.fs-symlink-breadcrumb');
+        const parts = path.split('/');
+        
+        breadcrumb.innerHTML = '';
+        
+        parts.forEach((part, index) => {
+            const pathSoFar = parts.slice(0, index + 1).join('/');
+            const span = document.createElement('span');
+            span.className = 'fs-breadcrumb-item';
+            span.textContent = part;
+            span.dataset.path = pathSoFar;
+            
+            span.addEventListener('click', async () => {
+                await this.loadSymlinkDirectoryContents(pathSoFar, dialog);
+            });
+            
+            breadcrumb.appendChild(span);
+            
+            if (index < parts.length - 1) {
+                const separator = document.createElement('span');
+                separator.className = 'fs-breadcrumb-separator';
+                separator.textContent = ' / ';
+                breadcrumb.appendChild(separator);
+            }
+        });
+    }
+
+    async createSymlink(sourceItem, targetPath) {
+        if (!this.modal) return;
+        
+        try {
+            UIComponents.showMessage(this.modal, 'Creating symlink...', false);
+            
+            const response = await fetch('/filesystem/create_symlink', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    source_path: sourceItem.path,
+                    target_path: targetPath
+                })
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                UIComponents.showMessage(this.modal, result.message, false);
+                // Refresh current directory to show new symlink
+                await this.refreshCurrentDirectory();
+            } else {
+                UIComponents.showMessage(this.modal, `Error: ${result.error}`, true);
+            }
+            
+        } catch (error) {
+            console.error('Error creating symlink:', error);
+            UIComponents.showMessage(this.modal, `Error creating symlink: ${error.message}`, true);
+        }
+    }
+
+    addSymlinkDialogStyles() {
+        if (document.querySelector('#fs-symlink-styles')) return;
+        
+        const style = document.createElement('style');
+        style.id = 'fs-symlink-styles';
+        style.textContent = `
+            .fs-symlink-dialog-overlay {
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                background: rgba(0, 0, 0, 0.7);
+                z-index: 10000;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            
+            .fs-symlink-dialog {
+                background: var(--comfy-menu-bg);
+                border: 2px solid var(--border-color);
+                border-radius: 8px;
+                min-width: 500px;
+                max-width: 700px;
+                max-height: 80vh;
+                display: flex;
+                flex-direction: column;
+            }
+            
+            .fs-symlink-header {
+                padding: 16px;
+                border-bottom: 1px solid var(--border-color);
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+            
+            .fs-symlink-header h3 {
+                margin: 0;
+                color: var(--input-text);
+                font-size: 18px;
+            }
+            
+            .fs-symlink-close {
+                background: none;
+                border: none;
+                color: var(--input-text);
+                font-size: 20px;
+                cursor: pointer;
+                padding: 4px 8px;
+                border-radius: 4px;
+            }
+            
+            .fs-symlink-close:hover {
+                background: var(--comfy-input-bg);
+            }
+            
+            .fs-symlink-content {
+                padding: 16px;
+                flex: 1;
+                overflow-y: auto;
+            }
+            
+            .fs-symlink-source {
+                margin-bottom: 24px;
+            }
+            
+            .fs-symlink-source label {
+                display: block;
+                color: var(--input-text);
+                font-weight: 600;
+                margin-bottom: 8px;
+            }
+            
+            .fs-symlink-source-path {
+                font-family: monospace;
+                background: var(--comfy-input-bg);
+                padding: 8px 12px;
+                border-radius: 4px;
+                color: var(--input-text);
+                font-weight: 600;
+                margin-bottom: 4px;
+            }
+            
+            .fs-symlink-source-full {
+                font-family: monospace;
+                color: var(--descrip-text);
+                font-size: 12px;
+            }
+            
+            .fs-symlink-target label {
+                display: block;
+                color: var(--input-text);
+                font-weight: 600;
+                margin-bottom: 8px;
+            }
+            
+            .fs-symlink-browser {
+                border: 1px solid var(--border-color);
+                border-radius: 4px;
+                background: var(--comfy-input-bg);
+            }
+            
+            .fs-symlink-breadcrumb {
+                padding: 8px 12px;
+                border-bottom: 1px solid var(--border-color);
+                font-family: monospace;
+                font-size: 12px;
+            }
+            
+            .fs-breadcrumb-item {
+                color: var(--input-text);
+                cursor: pointer;
+                padding: 2px 4px;
+                border-radius: 2px;
+            }
+            
+            .fs-breadcrumb-item:hover {
+                background: rgba(255, 255, 255, 0.1);
+            }
+            
+            .fs-breadcrumb-separator {
+                color: var(--descrip-text);
+            }
+            
+            .fs-symlink-contents {
+                max-height: 200px;
+                overflow-y: auto;
+                padding: 8px;
+            }
+            
+            .fs-symlink-dir-item,
+            .fs-symlink-select-current {
+                display: flex;
+                align-items: center;
+                padding: 8px 12px;
+                margin: 2px 0;
+                border-radius: 4px;
+                cursor: pointer;
+                transition: background-color 0.2s;
+            }
+            
+            .fs-symlink-dir-item:hover,
+            .fs-symlink-select-current:hover {
+                background: rgba(255, 255, 255, 0.1);
+            }
+            
+            .fs-symlink-dir-item.selected,
+            .fs-symlink-select-current.selected {
+                background: var(--comfy-menu-bg);
+                border: 1px solid var(--border-color);
+            }
+            
+            .fs-symlink-dir-icon {
+                margin-right: 8px;
+            }
+            
+            .fs-symlink-dir-name {
+                color: var(--input-text);
+                font-size: 14px;
+            }
+            
+            .fs-symlink-select-current .fs-symlink-dir-name {
+                font-weight: 600;
+                color: var(--comfy-menu-bg);
+            }
+            
+            .fs-symlink-actions {
+                padding: 16px;
+                border-top: 1px solid var(--border-color);
+                display: flex;
+                gap: 12px;
+                justify-content: flex-end;
+            }
+            
+            .fs-symlink-cancel,
+            .fs-symlink-create {
+                padding: 8px 16px;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 14px;
+                font-weight: 500;
+            }
+            
+            .fs-symlink-cancel {
+                background: var(--comfy-input-bg);
+                color: var(--input-text);
+            }
+            
+            .fs-symlink-cancel:hover {
+                background: var(--comfy-menu-bg);
+            }
+            
+            .fs-symlink-create {
+                background: var(--comfy-menu-bg);
+                color: var(--input-text);
+            }
+            
+            .fs-symlink-create:hover:not(:disabled) {
+                background: var(--comfy-input-bg);
+            }
+            
+            .fs-symlink-create:disabled {
+                opacity: 0.5;
+                cursor: not-allowed;
+            }
+            
+            .fs-error {
+                color: #ff6b6b;
+                text-align: center;
+                padding: 16px;
+                font-style: italic;
+            }
+        `;
+        
+        document.head.appendChild(style);
+    }
+
+     startGlobalModelsMonitoring() {
         this.stopGlobalModelsMonitoring(); // Clear existing before starting new
         this.globalModelsMonitoringInterval = setInterval(() => {
             this.updateGlobalModelDownloadProgress();
@@ -1326,20 +1779,6 @@ export class FileSystemManager {
             UIComponents.showMessage(this.modal, `Error: ${error.message}`, true); 
         }
     }
-
-    // REMOVE THE DUPLICATE updateGlobalModelDownloadProgress here if it existed.
-    // The one called by the interval is the one that needs the `if (this.modal)` guard.
-
-    // This one was a duplicate, let's remove it. Keep the one that's called by the interval
-    /*
-    async updateGlobalModelDownloadProgress() { // THIS IS A DUPLICATE, REMOVE
-        try {
-            // ...
-        } catch (error) {
-            // ...
-        }
-    }
-    */
 
 
     startGlobalModelDownloadProgress(modelPath) { // This seems for a specific model, not the general poller

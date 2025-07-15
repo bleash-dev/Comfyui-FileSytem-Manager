@@ -38,46 +38,174 @@ class ModelConfigManager:
     
     def _determine_model_group(self, local_path: str,
                                model_type: str = None) -> str:
-        """Determine the model group based on the local path and type"""
+        """
+        Determine the model group based on the local path and type.
+        Maps to ComfyUI's folder_paths structure and node types.
+        
+        This method supports all core ComfyUI model types and common
+        custom node model types, providing granular categorization
+        based on:
+        
+        1. Explicit model_type parameter (if provided)
+        2. Path-based detection using ComfyUI's standard folder structure
+        3. Common custom node model directory patterns
+        
+        Core ComfyUI Model Types (from folder_paths.py):
+        - checkpoints: Main diffusion models (.ckpt, .safetensors)
+        - diffusion_models/unet: UNET models for diffusion
+        - vae: Variational AutoEncoders
+        - vae_approx: Tiny AutoEncoder models (TAESD)
+        - text_encoders/clip: Text encoding models (CLIP, T5, etc.)
+        - clip_vision: Vision encoders for image conditioning
+        - loras: Low-Rank Adaptation models
+        - controlnet: ControlNet and T2I-Adapter models
+        - embeddings: Textual inversion embeddings
+        - upscale_models: Real-ESRGAN and similar upscaling models
+        - style_models: Style transfer models
+        - gligen: GLIGEN grounding models
+        - hypernetworks: Hypernetwork models
+        - photomaker: PhotoMaker models
+        - classifiers: Classification models
+        - diffusers: HuggingFace Diffusers format models
+        
+        Common Custom Node Model Types:
+        - ipadapter: IP-Adapter models for image prompting
+        - animatediff: AnimateDiff motion modules
+        - insightface: InsightFace models for face analysis
+        - instantid: InstantID models
+        - inpaint: Inpainting-specific models
+        - segmentation: Segmentation models
+        - depth_estimation: Depth estimation models
+        - pose_estimation: Pose estimation models (OpenPose, etc.)
+        - video_models: Video generation/processing models
+        - audio_models: Audio processing models
+        
+        Args:
+            local_path: The local file path to analyze
+            model_type: Optional explicit model type override
+            
+        Returns:
+            str: The determined model group/category
+        """
         local_path = local_path.lower()
         
         # First, try to use provided model_type
         if model_type:
             type_mapping = {
+                # Core model types from ComfyUI nodes.py
                 'checkpoint': 'checkpoints',
                 'checkpoints': 'checkpoints',
+                'diffusion_model': 'diffusion_models',
+                'diffusion_models': 'diffusion_models',
+                'unet': 'diffusion_models',
                 'vae': 'vae',
+                'vae_approx': 'vae_approx',
+                'text_encoder': 'text_encoders',
+                'text_encoders': 'text_encoders',
+                'clip': 'text_encoders',
+                'clip_vision': 'clip_vision',
                 'lora': 'loras',
                 'loras': 'loras',
                 'controlnet': 'controlnet',
+                't2i_adapter': 'controlnet',
                 'embedding': 'embeddings',
                 'embeddings': 'embeddings',
-                'upscale': 'upscale_models',
-                'upscale_models': 'upscale_models'
+                'upscale_model': 'upscale_models',
+                'upscale_models': 'upscale_models',
+                'style_model': 'style_models',
+                'style_models': 'style_models',
+                'gligen': 'gligen',
+                'hypernetwork': 'hypernetworks',
+                'hypernetworks': 'hypernetworks',
+                'photomaker': 'photomaker',
+                'classifier': 'classifiers',
+                'classifiers': 'classifiers',
+                'diffuser': 'diffusers',
+                'diffusers': 'diffusers',
+                # Additional custom node types
+                'ipadapter': 'ipadapter',
+                'ip_adapter': 'ipadapter',
+                'animatediff': 'animatediff',
+                'motion_module': 'animatediff',
+                'insightface': 'insightface',
+                'face_analysis': 'insightface',
+                'instantid': 'instantid',
+                'inpaint': 'inpaint',
+                'segmentation': 'segmentation',
+                'depth_estimation': 'depth_estimation',
+                'pose_estimation': 'pose_estimation',
+                'video_model': 'video_models',
+                'audio_model': 'audio_models',
             }
             mapped_type = type_mapping.get(model_type.lower())
             if mapped_type:
                 return mapped_type
         
-        # Fallback to path-based detection
-        if 'checkpoints' in local_path:
+        # Comprehensive path-based detection based on ComfyUI's folder
+        # structure. Order matters - more specific patterns first
+        
+        # Core ComfyUI model directories from folder_paths.py
+        if any(x in local_path for x in ['checkpoints', 'checkpoint']):
             return 'checkpoints'
+        elif any(x in local_path for x in ['diffusion_models', 'unet']):
+            return 'diffusion_models'
+        elif 'vae_approx' in local_path or 'taesd' in local_path:
+            return 'vae_approx'
         elif 'vae' in local_path:
             return 'vae'
-        elif 'loras' in local_path or 'lora' in local_path:
+        elif 'clip_vision' in local_path:
+            return 'clip_vision'
+        elif any(x in local_path for x in ['text_encoders', 'clip', 't5']):
+            return 'text_encoders'
+        elif any(x in local_path for x in ['loras', 'lora']):
             return 'loras'
-        elif 'controlnet' in local_path:
+        elif any(x in local_path for x in ['controlnet', 't2i_adapter']):
             return 'controlnet'
-        elif 'embeddings' in local_path:
+        elif any(x in local_path for x in ['embeddings', 'embedding']):
             return 'embeddings'
-        elif 'upscale' in local_path:
+        elif any(x in local_path for x in ['upscale_models', 'upscale']):
             return 'upscale_models'
-        elif 'ipadapter' in local_path:
+        elif any(x in local_path for x in ['style_models', 'style']):
+            return 'style_models'
+        elif 'gligen' in local_path:
+            return 'gligen'
+        elif any(x in local_path for x in ['hypernetworks', 'hypernetwork']):
+            return 'hypernetworks'
+        elif 'photomaker' in local_path:
+            return 'photomaker'
+        elif any(x in local_path for x in ['classifiers', 'classifier']):
+            return 'classifiers'
+        elif 'diffusers' in local_path:
+            return 'diffusers'
+        
+        # Common custom node model directories
+        elif any(x in local_path for x in
+                 ['ipadapter', 'ip_adapter', 'ip-adapter']):
             return 'ipadapter'
-        elif 'clip' in local_path:
-            return 'clip'
-        elif 'unet' in local_path:
-            return 'unet'
+        elif any(x in local_path for x in
+                 ['animatediff', 'motion_module', 'motion-module']):
+            return 'animatediff'
+        elif any(x in local_path for x in
+                 ['insightface', 'face_analysis', 'face-analysis']):
+            return 'insightface'
+        elif any(x in local_path for x in
+                 ['instantid', 'instant_id', 'instant-id']):
+            return 'instantid'
+        elif 'inpaint' in local_path:
+            return 'inpaint'
+        elif any(x in local_path for x in ['segmentation', 'segment']):
+            return 'segmentation'
+        elif any(x in local_path for x in ['depth', 'depth_estimation']):
+            return 'depth_estimation'
+        elif any(x in local_path for x in
+                 ['pose', 'pose_estimation', 'openpose']):
+            return 'pose_estimation'
+        elif any(x in local_path for x in ['video', 'video_models']):
+            return 'video_models'
+        elif any(x in local_path for x in ['audio', 'audio_models']):
+            return 'audio_models'
+        
+        # Fallback for unknown types
         else:
             return 'other'
     
@@ -205,7 +333,8 @@ class ModelConfigManager:
     def register_internet_model(self, local_path: str, download_url: str,
                                 model_name: str = None,
                                 model_type: str = None,
-                                source: str = "internet") -> bool:
+                                source: str = "internet",
+                                sym_linked_from: str = None) -> bool:
         """Register a model downloaded from the internet
         (HuggingFace, CivitAI, etc.)"""
         try:
@@ -228,6 +357,8 @@ class ModelConfigManager:
             # Add optional fields
             if file_size:
                 model_object["modelSize"] = file_size
+            if sym_linked_from:
+                model_object["symLinkedFrom"] = sym_linked_from
             
             # Convert to JSON string
             model_json = json.dumps(model_object)
@@ -251,25 +382,62 @@ class ModelConfigManager:
     
     def register_huggingface_model(self, local_path: str, repo_id: str,
                                    filename: str,
-                                   model_type: str = None) -> bool:
+                                   model_type: str = None,
+                                   model_name: str = None,
+                                   sym_linked_from: str = None) -> bool:
         """Register a model downloaded from HuggingFace"""
         download_url = f"https://huggingface.co/{repo_id}"
         if filename:
             download_url += f"/blob/main/{filename}"
         
-        model_name = filename or self._extract_model_name_from_path(local_path)
-        return self.register_internet_model(
-            local_path=local_path,
-            download_url=download_url,
-            model_name=model_name,
-            model_type=model_type,
-            source="huggingface"
-        )
+        if not model_name:
+            model_name = (filename or
+                          self._extract_model_name_from_path(local_path))
+        
+        # Call register_internet_model with all parameters
+        group = self._determine_model_group(local_path, model_type)
+        file_size = self._get_file_size(local_path)
+        
+        # Create model object for HuggingFace downloads
+        model_object = {
+            "localPath": local_path,
+            "modelName": model_name,
+            "directoryGroup": group,
+            "downloadUrl": download_url,
+            "downloadSource": "huggingface",
+            "repositoryId": repo_id
+        }
+        
+        # Add optional fields
+        if file_size:
+            model_object["modelSize"] = file_size
+        if filename:
+            model_object["fileName"] = filename
+        if sym_linked_from:
+            model_object["symLinkedFrom"] = sym_linked_from
+        
+        # Convert to JSON string
+        model_json = json.dumps(model_object)
+        
+        # Create the command
+        command = f"create_or_update_model '{group}' '{model_json}'"
+        
+        success, output = self._run_script_command(command)
+        
+        if success:
+            logger.info(f"Successfully registered HuggingFace model: "
+                        f"{local_path}")
+            return True
+        else:
+            logger.error(f"Failed to register HuggingFace model: {output}")
+            return False
     
     def register_civitai_model(self, local_path: str, model_id: str = None,
                                version_id: str = None,
                                direct_url: str = None,
-                               model_type: str = None) -> bool:
+                               model_type: str = None,
+                               model_name: str = None,
+                               sym_linked_from: str = None) -> bool:
         """Register a model downloaded from CivitAI"""
         if direct_url:
             download_url = direct_url
@@ -280,37 +448,78 @@ class ModelConfigManager:
         else:
             download_url = "https://civitai.com"
         
-        model_name = self._extract_model_name_from_path(local_path)
-        return self.register_internet_model(
-            local_path=local_path,
-            download_url=download_url,
-            model_name=model_name,
-            model_type=model_type,
-            source="civitai"
-        )
+        if not model_name:
+            model_name = self._extract_model_name_from_path(local_path)
+        
+        # Call register_internet_model with extended functionality
+        group = self._determine_model_group(local_path, model_type)
+        file_size = self._get_file_size(local_path)
+        
+        # Create model object for CivitAI downloads
+        model_object = {
+            "localPath": local_path,
+            "modelName": model_name,
+            "directoryGroup": group,
+            "downloadUrl": download_url,
+            "downloadSource": "civitai"
+        }
+        
+        # Add optional fields
+        if file_size:
+            model_object["modelSize"] = file_size
+        if model_id:
+            model_object["modelId"] = model_id
+        if version_id:
+            model_object["versionId"] = version_id
+        if sym_linked_from:
+            model_object["symLinkedFrom"] = sym_linked_from
+        
+        # Convert to JSON string
+        model_json = json.dumps(model_object)
+        
+        # Create the command
+        command = f"create_or_update_model '{group}' '{model_json}'"
+        
+        success, output = self._run_script_command(command)
+        
+        if success:
+            logger.info(f"Successfully registered CivitAI model: "
+                        f"{local_path}")
+            return True
+        else:
+            logger.error(f"Failed to register CivitAI model: {output}")
+            return False
     
     def register_google_drive_model(self, local_path: str, drive_url: str,
-                                    model_type: str = None) -> bool:
+                                    model_type: str = None,
+                                    model_name: str = None,
+                                    sym_linked_from: str = None) -> bool:
         """Register a model downloaded from Google Drive"""
-        model_name = self._extract_model_name_from_path(local_path)
+        if not model_name:
+            model_name = self._extract_model_name_from_path(local_path)
         return self.register_internet_model(
             local_path=local_path,
             download_url=drive_url,
             model_name=model_name,
             model_type=model_type,
-            source="google_drive"
+            source="google_drive",
+            sym_linked_from=sym_linked_from
         )
     
     def register_direct_url_model(self, local_path: str, url: str,
-                                  model_type: str = None) -> bool:
+                                  model_type: str = None,
+                                  model_name: str = None,
+                                  sym_linked_from: str = None) -> bool:
         """Register a model downloaded from a direct URL"""
-        model_name = self._extract_model_name_from_path(local_path)
+        if not model_name:
+            model_name = self._extract_model_name_from_path(local_path)
         return self.register_internet_model(
             local_path=local_path,
             download_url=url,
             model_name=model_name,
             model_type=model_type,
-            source="direct_url"
+            source="direct_url",
+            sym_linked_from=sym_linked_from
         )
     
     def register_huggingface_repo(self, repo_path: str, repo_id: str,
@@ -447,6 +656,179 @@ class ModelConfigManager:
             logger.warning(f"Could not extract model name from path "
                            f"{file_path}: {e}")
             return Path(file_path).name
+
+    def remove_model_by_path(self, local_path: str) -> bool:
+        """Remove a model from the configuration by its local path
+        
+        This method removes both the model entry and any symlinks
+        that reference the deleted file.
+        
+        Args:
+            local_path: The local file path of the model to remove
+            
+        Returns:
+            bool: True if removal was successful, False otherwise
+        """
+        try:
+            # Determine the model group based on the path
+            group = self._determine_model_group(local_path)
+            
+            # Extract model name from path
+            model_name = self._extract_model_name_from_path(local_path)
+            
+            logger.info(f"Attempting to remove model: {local_path} "
+                        f"(group: {group}, name: {model_name})")
+            
+            # Create the command to remove the model
+            # The shell script should handle both model removal and
+            # symlink cleanup
+            command = f"remove_model_by_path '{local_path}'"
+            
+            success, output = self._run_script_command(command)
+            
+            if success:
+                logger.info(f"Successfully removed model from config: "
+                            f"{local_path}")
+                return True
+            else:
+                # Log as warning rather than error since the file might not
+                # have been tracked in the first place
+                logger.warning(f"Could not remove model from config "
+                               f"(may not have been tracked): {local_path}, "
+                               f"output: {output}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error removing model from config: {local_path}, "
+                         f"error: {e}")
+            return False
+    
+    def get_model_info_by_path(self, local_path: str) -> Optional[dict]:
+        """Get model information from the config by local path"""
+        try:
+            # Use shell script to find model by path
+            command = f"find_model_by_path '{local_path}'"
+            success, output = self._run_script_command(command)
+            
+            if success and output.strip():
+                output = output.strip()
+                
+                # Check if output looks like a file path (temp file)
+                if output.startswith('/') and not output.startswith('{'):
+                    try:
+                        # Try to read from the file
+                        with open(output, 'r') as f:
+                            json_content = f.read().strip()
+                        if json_content:
+                            model_info = json.loads(json_content)
+                            print(f"Model info read from temp file: {model_info}")
+                            return model_info
+                    except (FileNotFoundError, json.JSONDecodeError) as e:
+                        logger.warning(f"Failed to read temp file "
+                                       f"{output}: {e}")
+                        return None
+                else:
+                    try:
+                        # Try to parse as direct JSON output
+                        model_info = json.loads(output)
+                        return model_info
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Failed to parse model info JSON: {e}")
+                        logger.debug(f"Raw output was: {repr(output)}")
+                        return None
+            else:
+                logger.debug(f"Model not found in config: {local_path}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error getting model info by path: {e}")
+            return None
+
+    def register_symlink_model(self, source_path: str, symlink_path: str,
+                               source_model_info: dict = None) -> bool:
+        """Register a symlink model based on source model information"""
+        try:
+            # Get source model info if not provided
+            if not source_model_info:
+                source_model_info = self.get_model_info_by_path(source_path)
+            
+            # Determine the model group from the symlink path (destination)
+            # This is important because the symlink should be registered
+            # under the group where it's located, not where the source is
+            symlink_model_type = self._determine_model_type_from_path(symlink_path)
+            
+            if not source_model_info:
+                logger.warning(f"Source model not found in config: "
+                               f"{source_path}")
+                logger.warning("Cannot register symlink without source model "
+                               "info. Symlink registration skipped.")
+                return False
+            
+            # Determine the registration method based on source model type
+            download_source = source_model_info.get("downloadSource",
+                                                    "unknown")
+            print(f"Registering symlink model from source: {download_source}, "
+                  f"destination group: {symlink_model_type}")
+            
+            # Create symlink model entry based on source model
+            # Use symlink_model_type for all registrations
+            if download_source == "s3":
+                return self.register_s3_model(
+                    local_path=symlink_path,
+                    s3_path=source_model_info.get("originalS3Path", ""),
+                    model_name=source_model_info.get("modelName"),
+                    model_type=symlink_model_type,  # Use destination group
+                    download_link=source_model_info.get("downloadUrl"),
+                    sym_linked_from=source_path
+                )
+            elif download_source == "huggingface":
+                return self.register_huggingface_model(
+                    local_path=symlink_path,
+                    repo_id=source_model_info.get("repositoryId", ""),
+                    filename=source_model_info.get("fileName"),
+                    model_name=source_model_info.get("modelName"),
+                    model_type=symlink_model_type,  # Use destination group
+                    sym_linked_from=source_path
+                )
+            elif download_source == "civitai":
+                return self.register_civitai_model(
+                    local_path=symlink_path,
+                    model_id=source_model_info.get("modelId"),
+                    model_name=source_model_info.get("modelName"),
+                    model_type=symlink_model_type,  # Use destination group
+                    sym_linked_from=source_path
+                )
+            elif download_source == "google_drive":
+                return self.register_google_drive_model(
+                    local_path=symlink_path,
+                    drive_url=source_model_info.get("googleDriveUrl", ""),
+                    model_name=source_model_info.get("modelName"),
+                    model_type=symlink_model_type,  # Use destination group
+                    sym_linked_from=source_path
+                )
+            elif download_source == "direct_url":
+                return self.register_direct_url_model(
+                    local_path=symlink_path,
+                    url=source_model_info.get("downloadUrl", ""),
+                    model_name=source_model_info.get("modelName"),
+                    model_type=symlink_model_type,  # Use destination group
+                    sym_linked_from=source_path
+                )
+            else:
+                # Fallback to internet model registration
+                download_url = source_model_info.get("downloadUrl",
+                                                     "manual_symlink")
+                return self.register_internet_model(
+                    local_path=symlink_path,
+                    download_url=download_url,
+                    model_name=source_model_info.get("modelName"),
+                    model_type=symlink_model_type,  # Use destination group
+                    sym_linked_from=source_path
+                )
+                
+        except Exception as e:
+            logger.error(f"Error registering symlink model: {e}")
+            return False
 
 
 # Global instance

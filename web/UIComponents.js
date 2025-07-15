@@ -333,6 +333,11 @@ export class UIComponents {
     }
 
     static getGlobalModelIndicator(item) {
+        // Show symlink indicator first
+        if (item.is_symlink) {
+            return '<span class="fs-symlink-indicator">🔗 Symlink</span>';
+        }
+        
         if (item.global_exists && !item.local_exists && item.downloadable) {
             return '<span class="fs-global-indicator">🌐 Global</span>';
         } else if (item.global_exists && item.local_exists) {
@@ -344,6 +349,15 @@ export class UIComponents {
     }
 
     static getItemIcon(item) {
+        // Handle symlinks first
+        if (item.is_symlink) {
+            if (item.type === 'directory') {
+                return '<p><span class="fs-item-icon fs-symlink">🔗 📁</span></p>';
+            } else {
+                return '<span class="fs-item-icon fs-symlink">🔗 📄</span>';
+            }
+        }
+        
         if (item.type === 'directory') {
             if (item.global_exists && !item.local_exists) {
                 return '<p><span class="fs-item-icon">🌐 📁</span></p>';

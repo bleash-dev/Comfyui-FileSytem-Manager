@@ -198,7 +198,7 @@ export class InitialModelsSyncDialog {
                     border-radius: 4px;
                     cursor: pointer;
                 " disabled>Sync Selected Models</button>
-                <button class="cancel-btn" style="
+                <--<button class="cancel-btn" style="
                     background: #dc3545;
                     border: 1px solid #c82333;
                     color: white;
@@ -206,7 +206,7 @@ export class InitialModelsSyncDialog {
                     border-radius: 4px;
                     cursor: pointer;
                     display: none;
-                ">Cancel Download</button>
+                ">Cancel Download</button> -->
                 <button class="retry-failed-btn" style="
                     background: #fd7e14;
                     border: 1px solid #e85e00;
@@ -236,7 +236,7 @@ export class InitialModelsSyncDialog {
         this.selectNoneBtn = this.dialog.querySelector('.select-none-btn');
         this.skipBtn = this.dialog.querySelector('.skip-btn');
         this.syncBtn = this.dialog.querySelector('.sync-btn');
-        this.cancelBtn = this.dialog.querySelector('.cancel-btn');
+        // this.cancelBtn = this.dialog.querySelector('.cancel-btn');
         this.retryFailedBtn = this.dialog.querySelector('.retry-failed-btn');
     }
 
@@ -245,7 +245,7 @@ export class InitialModelsSyncDialog {
         this.selectNoneBtn.addEventListener('click', () => this.selectNone());
         this.skipBtn.addEventListener('click', () => this.skipSync());
         this.syncBtn.addEventListener('click', () => this.startSync());
-        this.cancelBtn.addEventListener('click', () => this.cancelSync());
+        // this.cancelBtn.addEventListener('click', () => this.cancelSync());
         this.retryFailedBtn.addEventListener('click', () => this.retryFailedDownloads());
     }
 
@@ -563,14 +563,14 @@ export class InitialModelsSyncDialog {
         this.syncProgress.style.display = 'block';
         this.skipBtn.style.display = 'none';
         this.syncBtn.style.display = 'none';
-        this.cancelBtn.style.display = 'inline-block';
+        // this.cancelBtn.style.display = 'inline-block';
     }
 
     hideProgress() {
         this.syncProgress.style.display = 'none';
         this.skipBtn.style.display = 'inline-block';
         this.syncBtn.style.display = 'inline-block';
-        this.cancelBtn.style.display = 'none';
+        // this.cancelBtn.style.display = 'none';
     }
 
     startProgressMonitoring() {

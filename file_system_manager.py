@@ -5,7 +5,7 @@ import tempfile
 import shutil
 import asyncio
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List
 from urllib.parse import unquote
 import folder_paths
 from server import PromptServer as PS
@@ -28,6 +28,16 @@ download_progress = {}
 # Import download endpoints
 from .download_endpoints import FileSystemDownloadAPI
 from .google_drive_handler import GoogleDriveDownloaderAPI, progress_store as gdrive_progress_store
+
+# Import Model Config Manager
+try:
+    from .model_config_integration import model_config_manager
+    MODEL_CONFIG_AVAILABLE = True
+except ImportError:
+    print("Model config manager not available")
+    model_config_manager = None
+    MODEL_CONFIG_AVAILABLE = False
+
 # Import Hugging Face Handler
 from .huggingface_handler import HuggingFaceDownloadAPI, hf_progress_store
 # Import CivitAI Handler
@@ -143,9 +153,11 @@ class FileSystemManagerAPI:
             if path_exists_locally and is_local_path_allowed:
                 for item in sorted(target_path.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
                     try:
-                        actual_target = None # Initialize actual_target
-                        symlink_target_exists = False # Initialize
-                        if item.is_symlink():
+                        actual_target = None  # Initialize actual_target
+                        symlink_target_exists = False  # Initialize
+                        is_symlink = item.is_symlink()
+                        
+                        if is_symlink:
                             try:
                                 actual_target = item.resolve()
                                 if actual_target.exists():
@@ -157,7 +169,8 @@ class FileSystemManagerAPI:
                             except (OSError, FileNotFoundError):
                                 try:
                                     item.unlink()
-                                except: pass # Ignore error if unlinking fails
+                                except Exception:
+                                    pass  # Ignore error if unlinking fails
                                 continue
                         else:
                             if not item.exists():
@@ -167,20 +180,36 @@ class FileSystemManagerAPI:
                             except (OSError, FileNotFoundError):
                                 continue
                         
-                        item_relative_path = item.relative_to(self.allowed_directories[root_dir])
-                        item_display_path = f"{root_dir}/{item_relative_path}".replace("\\", "/")
+                        item_relative_path = item.relative_to(
+                            self.allowed_directories[root_dir])
+                        item_display_path = (f"{root_dir}/{item_relative_path}"
+                                             .replace("\\", "/"))
 
-                        if item.is_symlink() and symlink_target_exists and actual_target: # Check actual_target is not None
-                            item_type = 'directory' if actual_target.is_dir() else 'file'
-                            item_size = item_stat.st_size if actual_target.is_file() else None
+                        if (is_symlink and symlink_target_exists and
+                                actual_target):
+                            item_type = ('directory' if actual_target.is_dir()
+                                         else 'file')
+                            item_size = (item_stat.st_size if
+                                         actual_target.is_file() else None)
                         else:
-                            item_type = 'directory' if item.is_dir() else 'file'
-                            item_size = item_stat.st_size if item.is_file() else None
+                            item_type = ('directory' if item.is_dir() else
+                                         'file')
+                            item_size = (item_stat.st_size if item.is_file()
+                                         else None)
 
                         item_data = {
-                            'name': item.name, 'path': item_display_path, 'type': item_type,
-                            'size': item_size, 'modified': item_stat.st_mtime,
-                            'local_exists': True, 'global_exists': False, 'downloadable': False
+                            'name': item.name,
+                            'path': item_display_path,
+                            'type': item_type,
+                            'size': item_size,
+                            'modified': item_stat.st_mtime,
+                            'local_exists': True,
+                            'global_exists': False,
+                            'downloadable': False,
+                            'is_symlink': is_symlink,  # Mark symlinks
+                            'symlink_target': (str(actual_target)
+                                               if is_symlink and actual_target
+                                               else None)
                         }
                         contents.append(item_data)
                         local_items[item.name] = item_data
@@ -355,11 +384,72 @@ class FileSystemManagerAPI:
                 return {"success": False, "error": "Item not found or not allowed"}
 
             if item_path.is_dir():
-                shutil.rmtree(item_path) # Recursively delete directory
-                return {"success": True, "message": f"Directory '{item_path.name}' deleted successfully"}
-            else: # It's a file
+                shutil.rmtree(item_path)  # Recursively delete directory
+                # Note: For directories, we don't remove from model config
+                # as they might contain multiple models
+                return {"success": True, 
+                        "message": f"Directory '{item_path.name}' deleted successfully"}
+            else:  # It's a file
+                # Check if it's a symlink before deletion
+                is_symlink = item_path.is_symlink()
+                
+                # Store the absolute path before deletion for model config
+                # removal
+                absolute_path = str(item_path.resolve())
+                
+                # If this is not a symlink, find and delete all symlinks
+                # pointing to this file
+                symlinks_deleted = 0
+                if not is_symlink:
+                    symlinks_pointing_to_file = (
+                        self.find_symlinks_pointing_to_file(item_path))
+                    for symlink_path in symlinks_pointing_to_file:
+                        try:
+                            # Delete the symlink
+                            symlink_path.unlink()
+                            symlinks_deleted += 1
+                            print(f"🔗 Deleted symlink pointing to deleted "
+                                  f"file: {symlink_path}")
+                        except Exception as e:
+                            print(f"⚠️ Error deleting symlink "
+                                  f"{symlink_path}: {e}")
+                
+                # Delete the file/symlink
                 item_path.unlink()
-                return {"success": True, "message": f"File '{item_path.name}' deleted successfully"}
+                
+                # Remove from model config if the model config manager is
+                # available
+                if MODEL_CONFIG_AVAILABLE and model_config_manager:
+                    try:
+                        # Only attempt removal for files in the models
+                        # directory
+                        if 'models' in relative_path:
+                            success = (model_config_manager.
+                                       remove_model_by_path(absolute_path))
+                            if success:
+                                symlink_msg = (" (symlink)" if is_symlink
+                                               else "")
+                                print(f"✅ Removed model{symlink_msg} from "
+                                      f"config: {absolute_path}")
+                            else:
+                                symlink_msg = (" (symlink)" if is_symlink
+                                               else "")
+                                print(f"⚠️ Could not remove "
+                                      f"model{symlink_msg} from config "
+                                      f"(may not have been tracked): "
+                                      f"{absolute_path}")
+                    except Exception as e:
+                        print(f"⚠️ Error removing model from config: {e}")
+                        # Don't fail the deletion if model config removal fails
+                
+                file_type = "symlink" if is_symlink else "file"
+                message = (f"{file_type.capitalize()} "
+                           f"'{item_path.name}' deleted successfully")
+                
+                if symlinks_deleted > 0:
+                    message += f" (also deleted {symlinks_deleted} symlink(s))"
+                
+                return {"success": True, "message": message}
             
         except Exception as e:
             print(f"Error deleting item: {e}")
@@ -399,6 +489,131 @@ class FileSystemManagerAPI:
 
         except Exception as e:
             print(f"Error renaming item: {e}")
+            return {"success": False, "error": str(e)}
+
+    def find_symlinks_pointing_to_file(self, target_file_path: Path
+                                       ) -> List[Path]:
+        """Find all symlinks that point to the specified target file"""
+        symlinks = []
+        target_absolute = target_file_path.resolve()
+        
+        try:
+            # Search through all allowed directories for symlinks
+            for root_name, root_path in self.allowed_directories.items():
+                if not root_path.exists():
+                    continue
+                    
+                # Walk through all subdirectories
+                for item in root_path.rglob('*'):
+                    try:
+                        if item.is_symlink():
+                            # Check if this symlink points to our target file
+                            symlink_target = item.resolve()
+                            if symlink_target == target_absolute:
+                                symlinks.append(item)
+                    except (OSError, ValueError):
+                        # Skip broken symlinks or permission errors
+                        continue
+                        
+        except Exception as e:
+            print(f"Error finding symlinks: {e}")
+            
+        return symlinks
+
+    def create_symlink(self, source_relative_path: str,
+                       target_relative_path: str) -> Dict[str, Any]:
+        """Create a symlink from source file to target location"""
+        try:
+            if not source_relative_path or not target_relative_path:
+                return {"success": False,
+                        "error": "Source and target paths required"}
+
+            # Parse source path
+            source_parts = source_relative_path.strip('/').split('/')
+            source_root = source_parts[0]
+            if source_root not in self.allowed_directories:
+                return {"success": False, "error": "Invalid source path"}
+
+            source_path = self.allowed_directories[source_root]
+            for part in source_parts[1:]:
+                source_path = source_path / part
+
+            # Validate source file exists and is allowed
+            if (not self.is_path_allowed(source_path) or
+                    not source_path.exists()):
+                return {"success": False,
+                        "error": "Source file not found or not allowed"}
+
+            if not source_path.is_file():
+                return {"success": False, "error": "Source must be a file"}
+
+            # Parse target path
+            target_parts = target_relative_path.strip('/').split('/')
+            target_root = target_parts[0]
+            if target_root not in self.allowed_directories:
+                return {"success": False, "error": "Invalid target path"}
+
+            # Only allow symlinks within models directory for security
+            if target_root != 'models':
+                return {"success": False,
+                        "error": "Symlinks only allowed within models directory"}
+
+            target_dir = self.allowed_directories[target_root]
+            for part in target_parts[1:]:
+                target_dir = target_dir / part
+
+            # Validate target directory exists and is allowed
+            if (not self.is_path_allowed(target_dir) or
+                    not target_dir.exists()):
+                return {"success": False,
+                        "error": "Target directory not found or not allowed"}
+
+            if not target_dir.is_dir():
+                return {"success": False,
+                        "error": "Target must be a directory"}
+
+            # Create symlink with same filename in target directory
+            symlink_path = target_dir / source_path.name
+
+            # Check if symlink already exists
+            if symlink_path.exists():
+                return {"success": False,
+                        "error": f"File '{source_path.name}' already exists "
+                                 f"in target directory"}
+
+            # Create the symlink
+            symlink_path.symlink_to(source_path)
+
+            # Register the symlink in model config if available
+            if MODEL_CONFIG_AVAILABLE and model_config_manager:
+                try:
+                    # Register the symlink model based on source model info
+                    # Use absolute path for source lookup in config
+                    source_absolute_path = str(source_path.resolve())
+
+                    print(f"Registering symlink: {symlink_path} -> {source_path}")
+                    
+                    success = model_config_manager.register_symlink_model(
+                        source_absolute_path,
+                        f'{symlink_path}'
+                    )
+                    if success:
+                        print(f"✅ Registered symlink in model config: "
+                              f"{symlink_path} -> {source_path}")
+                    else:
+                        print("⚠️ Failed to register symlink in model config")
+                except Exception as e:
+                    print(f"⚠️ Error registering symlink in config: {e}")
+                    # Don't fail symlink creation if config update fails
+
+            return {
+                "success": True,
+                "message": f"Symlink created: '{source_path.name}' "
+                           f"in '{target_relative_path}'"
+            }
+
+        except Exception as e:
+            print(f"Error creating symlink: {e}")
             return {"success": False, "error": str(e)}
 
 
@@ -463,6 +678,31 @@ async def rename_item_endpoint(request):
         return web.json_response(result)
     except Exception as e: return web.json_response({'success': False, 'error': str(e)}, status=500)
         
+@PS.instance.routes.post("/filesystem/create_symlink")
+async def create_symlink_endpoint(request):
+    """Create a symlink from source file to target directory"""
+    try:
+        data = await request.json()
+        source_path = data.get("source_path")
+        target_path = data.get("target_path")
+        
+        if not source_path or not target_path:
+            return web.json_response({
+                'success': False,
+                'error': 'Source and target paths required'
+            }, status=400)
+        
+        result = file_system_api.create_symlink(
+            unquote(source_path),
+            unquote(target_path)
+        )
+        return web.json_response(result)
+    except Exception as e:
+        return web.json_response({
+            'success': False,
+            'error': str(e)
+        }, status=500)
+
 @PS.instance.routes.get("/filesystem/download_file")
 async def download_file_route_endpoint(request): # Renamed
     return await download_api.download_file(request)

@@ -185,6 +185,19 @@ style.textContent = `
     height: 16px;
 }
 
+.fs-item-icon.fs-symlink {
+    color: #6f42c1;
+    font-weight: bold;
+}
+
+tr[data-path] td:first-child .fs-item .fs-item-icon.fs-symlink {
+    opacity: 0.8;
+}
+
+tr[data-path]:has(.fs-symlink) {
+    background-color: rgba(111, 66, 193, 0.05);
+}
+
 .fs-item-name-link {
     cursor: pointer;
     color: #007bff; /* Or inherit from breadcrumb-item */
@@ -883,6 +896,19 @@ style.textContent = `
     background-color: rgba(255, 255, 255, 0.1);
     white-space: nowrap; /* Prevent text wrapping */
     font-weight: 500; /* Slightly bolder */
+}
+
+.fs-symlink-indicator {
+    margin-left: auto; /* Push to the right */
+    font-size: 11px; /* Slightly smaller */
+    opacity: 0.9;
+    flex-shrink: 0;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background-color: rgba(111, 66, 193, 0.2);
+    color: #6f42c1;
+    white-space: nowrap;
+    font-weight: 500;
 }
 
 .fs-global-model-name {
