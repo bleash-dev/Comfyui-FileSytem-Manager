@@ -19,9 +19,9 @@ style.textContent = `
     border: 1px solid var(--border-color);
     border-radius: 8px;
     padding: 20px;
-    width: 800px;
+    width: 1000px;
     max-width: 90vw;
-    height: 650px;
+    height: 800px;
     max-height: 80vh;
     display: flex;
     flex-direction: column;
