@@ -198,15 +198,7 @@ export class InitialModelsSyncDialog {
                     border-radius: 4px;
                     cursor: pointer;
                 " disabled>Sync Selected Models</button>
-                <--<button class="cancel-btn" style="
-                    background: #dc3545;
-                    border: 1px solid #c82333;
-                    color: white;
-                    padding: 10px 20px;
-                    border-radius: 4px;
-                    cursor: pointer;
-                    display: none;
-                ">Cancel Download</button> -->
+               
                 <button class="retry-failed-btn" style="
                     background: #fd7e14;
                     border: 1px solid #e85e00;
