@@ -865,37 +865,51 @@ export class InitialModelsSyncDialog {
         this.updateSyncButtonState();
         this.hideProgress();
         
-        // Hide all model statuses when sync is complete
-        const modelStatuses = this.modelsList.querySelectorAll('.model-status');
-        modelStatuses.forEach(status => {
-            status.style.display = 'none';
-        });
-        
         if (success) {
-            // Check for any failed downloads and show summary
-            setTimeout(async () => {
-                const failedModels = this.getFailedModels();
-                let message = 'Models sync completed successfully!';
+            // Check for any failed downloads first, before hiding statuses
+            const failedModels = this.getFailedModels();
+            
+            if (failedModels.length > 0) {
+                // Keep failed model statuses visible but hide successful ones
+                const modelStatuses = this.modelsList.querySelectorAll('.model-status');
+                modelStatuses.forEach(status => {
+                    const badge = status.querySelector('.status-badge');
+                    if (badge && !badge.textContent.includes('Failed')) {
+                        status.style.display = 'none';
+                    }
+                });
                 
-                if (failedModels.length > 0) {
-                    message = `Sync completed with ${failedModels.length} failed downloads:\n\n` +
-                             failedModels.map(model => `• ${model}`).join('\n') +
-                             '\n\nWould you like to retry the failed downloads?';
-                    
-                    // Show retry button
-                    this.retryFailedBtn.style.display = 'inline-block';
-                    this.skipBtn.style.display = 'inline-block';
-                    this.skipBtn.textContent = 'Skip Failed';
-                    
-                    alert(message);
-                } else {
-                    alert(message);
-                    await this.markSyncCompleted();
+                // Show retry button immediately
+                this.retryFailedBtn.style.display = 'inline-block';
+                this.skipBtn.style.display = 'inline-block';
+                this.skipBtn.textContent = 'Skip Failed';
+                
+                const message = `Sync completed with ${failedModels.length} failed downloads:\n\n` +
+                               failedModels.map(model => `• ${model}`).join('\n') +
+                               '\n\nUse the "Retry Failed" button below to retry failed downloads.';
+                alert(message);
+            } else {
+                // Hide all model statuses when all downloads succeeded
+                const modelStatuses = this.modelsList.querySelectorAll('.model-status');
+                modelStatuses.forEach(status => {
+                    status.style.display = 'none';
+                });
+                
+                // Ensure retry button is hidden
+                this.retryFailedBtn.style.display = 'none';
+                this.skipBtn.style.display = 'none';
+                
+                alert('Models sync completed successfully!');
+                this.markSyncCompleted().then(() => {
                     this.hide();
-                }
-            }, 500);
+                });
+            }
         } else {
-            // Sync was cancelled
+            // Sync was cancelled - hide all statuses
+            const modelStatuses = this.modelsList.querySelectorAll('.model-status');
+            modelStatuses.forEach(status => {
+                status.style.display = 'none';
+            });
             alert('Sync was cancelled.');
         }
     }
@@ -919,7 +933,27 @@ export class InitialModelsSyncDialog {
     }
 
     async skipSync() {
-        if (confirm('Are you sure you want to skip syncing models? You can sync them later from the file manager.')) {
+        // Check if we're in the failed state by looking for visible retry button
+        const hasFailedDownloads = this.retryFailedBtn.style.display === 'inline-block';
+        
+        let confirmMessage = 'Are you sure you want to skip syncing models? You can sync them later from the file manager.';
+        if (hasFailedDownloads) {
+            confirmMessage = 'Are you sure you want to skip the failed downloads? You can retry them later from the file manager.';
+        }
+        
+        if (confirm(confirmMessage)) {
+            // Hide retry button and failed statuses
+            this.retryFailedBtn.style.display = 'none';
+            this.skipBtn.style.display = 'none';
+            
+            if (hasFailedDownloads) {
+                // Hide all remaining model statuses
+                const modelStatuses = this.modelsList.querySelectorAll('.model-status');
+                modelStatuses.forEach(status => {
+                    status.style.display = 'none';
+                });
+            }
+            
             await this.markSyncCompleted();
             this.hide();
         }
