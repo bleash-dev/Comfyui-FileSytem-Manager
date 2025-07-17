@@ -43,11 +43,24 @@ export class InitialModelsSyncDialog {
                 background: linear-gradient(90deg, #007bff, #0056b3);
                 background-size: 200% 100%;
                 animation: progress-shimmer 2s infinite linear;
+                transition: width 0.8s ease;
+            }
+            
+            .initial-sync-dialog .model-progress-fill.completed {
+                background: linear-gradient(90deg, #28a745, #218838) !important;
+                animation: completion-flash 1s ease-in-out !important;
+                transition: width 0.3s ease !important;
             }
             
             @keyframes progress-shimmer {
                 0% { background-position: 200% 0; }
                 100% { background-position: -200% 0; }
+            }
+            
+            @keyframes completion-flash {
+                0% { transform: scaleX(1); }
+                50% { transform: scaleX(1.02); }
+                100% { transform: scaleX(1); }
             }
         `;
         document.head.appendChild(style);
@@ -828,15 +841,31 @@ export class InitialModelsSyncDialog {
                 // Update status badge with UI status
                 this.updateStatusBadge(statusBadge, uiStatus);
                 
+                // Log status change for debugging
+                if (uiStatus === 'completed') {
+                    console.log(`Model ${modelName} UI marked as completed with progress: ${progress}%`);
+                }
+                
                 // Show/hide progress bar based on status
                 if (uiStatus === 'downloading' || uiStatus === 'completed') {
                     progressDiv.style.display = 'block';
-                    progressFill.style.width = `${progress}%`;
                     
-                    if (uiStatus === 'downloading') {
-                        progressText.textContent = `${this.formatFileSize(downloadedBytes)} / ${this.formatFileSize(totalBytes)} (${progress.toFixed(1)}%)`;
-                    } else if (uiStatus === 'completed') {
+                    if (uiStatus === 'completed') {
+                        // For completed models, always show 100% progress
+                        progressFill.style.width = '100%';
+                        progressFill.classList.add('completed');
                         progressText.textContent = `✓ Complete (${this.formatFileSize(totalBytes)})`;
+                        console.log(`Model ${modelName} progress bar set to 100%`);
+                        
+                        // Ensure the completion animation is visible
+                        setTimeout(() => {
+                            progressFill.style.width = '100%';
+                        }, 50);
+                    } else {
+                        // For downloading models, show simulated progress
+                        progressFill.classList.remove('completed');
+                        progressFill.style.width = `${progress}%`;
+                        progressText.textContent = `${this.formatFileSize(downloadedBytes)} / ${this.formatFileSize(totalBytes)} (${progress.toFixed(1)}%)`;
                     }
                 } else {
                     progressDiv.style.display = 'none';
@@ -1141,11 +1170,15 @@ export class InitialModelsSyncDialog {
                     simulation.isDownloading = true;
                     simulation.startTime = now;
                 } else if (status === 'downloaded' && !simulation.isCompleted) {
-                    // Model completed - quickly fill to 100%
+                    // Model completed - animate to 100% over 500ms for smooth completion
                     simulation.isCompleted = true;
                     simulation.isDownloading = false;
                     simulation.progress = 100;
                     simulation.downloadedBytes = simulation.modelSize;
+                    simulation.completionTime = now; // Track when it completed
+                    
+                    // Log completion for debugging
+                    console.log(`Model ${modelName} completed download simulation`);
                 } else if (status === 'failed') {
                     // Model failed
                     simulation.isDownloading = false;
