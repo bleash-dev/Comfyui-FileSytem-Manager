@@ -97,12 +97,12 @@ class ModelConfigManager:
                 'checkpoints': 'checkpoints',
                 'diffusion_model': 'diffusion_models',
                 'diffusion_models': 'diffusion_models',
-                'unet': 'diffusion_models',
+                'unet': 'unet',
                 'vae': 'vae',
                 'vae_approx': 'vae_approx',
                 'text_encoder': 'text_encoders',
                 'text_encoders': 'text_encoders',
-                'clip': 'text_encoders',
+                'clip': 'clip',
                 'clip_vision': 'clip_vision',
                 'lora': 'loras',
                 'loras': 'loras',
@@ -155,7 +155,7 @@ class ModelConfigManager:
             return 'vae'
         elif 'clip_vision' in local_path:
             return 'clip_vision'
-        elif any(x in local_path for x in ['text_encoders', 'clip', 't5']):
+        elif any(x in local_path for x in ['text_encoders', 't5']):
             return 'text_encoders'
         elif any(x in local_path for x in ['loras', 'lora']):
             return 'loras'
@@ -207,7 +207,9 @@ class ModelConfigManager:
         
         # Fallback for unknown types
         else:
-            return 'other'
+            # extract the model type from the path
+            extracted_type = self._determine_model_type_from_path(local_path)
+            return extracted_type or "other"
     
     def _determine_model_type_from_path(self, local_path: str) -> str:
         """Extract model type from ComfyUI models directory structure.
@@ -285,7 +287,7 @@ class ModelConfigManager:
                           sym_linked_from: str = None) -> bool:
         """Register a model downloaded from S3"""
         try:
-            group = self._determine_model_group(local_path, model_type)
+            group = self._determine_model_type_from_path(local_path)
             file_size = self._get_file_size(local_path)
             
             # Extract model name from path if not provided
@@ -338,7 +340,7 @@ class ModelConfigManager:
         """Register a model downloaded from the internet
         (HuggingFace, CivitAI, etc.)"""
         try:
-            group = self._determine_model_group(local_path, model_type)
+            group = self._determine_model_type_from_path(local_path)
             file_size = self._get_file_size(local_path)
             
             # Extract model name from path if not provided
@@ -395,7 +397,7 @@ class ModelConfigManager:
                           self._extract_model_name_from_path(local_path))
         
         # Call register_internet_model with all parameters
-        group = self._determine_model_group(local_path, model_type)
+        group = self._determine_model_type_from_path(local_path)
         file_size = self._get_file_size(local_path)
         
         # Create model object for HuggingFace downloads
@@ -452,7 +454,7 @@ class ModelConfigManager:
             model_name = self._extract_model_name_from_path(local_path)
         
         # Call register_internet_model with extended functionality
-        group = self._determine_model_group(local_path, model_type)
+        group = self._determine_model_type_from_path(local_path, model_type)
         file_size = self._get_file_size(local_path)
         
         # Create model object for CivitAI downloads

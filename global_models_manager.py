@@ -157,6 +157,37 @@ class GlobalModelsManager:
         
         return progress_callback
 
+    def cleanup_temp_file(self, temp_path):
+        """Clean up temporary file safely"""
+        try:
+            if temp_path and Path(temp_path).exists():
+                Path(temp_path).unlink()
+                print(f"🗑️ Cleaned up temp file: {temp_path}")
+        except Exception as e:
+            print(f"⚠️ Failed to clean up temp file {temp_path}: {e}")
+
+    def move_temp_to_final(self, temp_path, final_path, session_id=None):
+        """Move temporary file to final destination with cancellation check"""
+        try:
+            # Check for cancellation before moving
+            if session_id and self.active_downloads.get(session_id, {}).get("cancelled"):
+                self.cleanup_temp_file(temp_path)
+                return False
+            
+            temp_file = Path(temp_path)
+            final_file = Path(final_path)
+            
+            # Ensure target directory exists
+            final_file.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Move file atomically
+            temp_file.rename(final_file)
+            return True
+            
+        except Exception as e:
+            self.cleanup_temp_file(temp_path)
+            raise e
+
     def _format_file_size(self, bytes_size):
         """Format file size in human readable format"""
         if bytes_size == 0:
@@ -207,6 +238,19 @@ class GlobalModelsManager:
             s3_full_path = f"{self.s3_models_base}{category}/{filename}"
             local_path = self.models_dir / category / filename
             
+            # Create temporary file for download
+            import tempfile
+            temp_dir = Path(tempfile.gettempdir())
+            temp_download_path = temp_dir / f"s3_model_{model_path.replace('/', '_')}.tmp"
+            
+            # Clean up any existing temp file for retry
+            if temp_download_path.exists():
+                try:
+                    temp_download_path.unlink()
+                    print(f"🧹 Cleaned up existing temp file: {temp_download_path}")
+                except OSError as e:
+                    print(f"Warning: Could not clean up temp file {temp_download_path}: {e}")
+            
             # Clean up any partial download files for retry
             if local_path.exists():
                 try:
@@ -243,19 +287,20 @@ class GlobalModelsManager:
 
             # Use boto3 if available for better progress tracking
             if self.s3_client and s3_full_path.startswith("s3://"):
-                success = await self._download_with_boto3(model_path, s3_full_path, local_path, total_size)
+                success = await self._download_with_boto3(model_path, s3_full_path, temp_download_path, total_size)
             else:
                 # Fallback to AWS CLI with monitoring
-                success = await self._download_with_aws_cli(model_path, s3_full_path, local_path, total_size)
+                success = await self._download_with_aws_cli(model_path, s3_full_path, temp_download_path, total_size)
 
             # Check for final cancellation
             if self.active_downloads.get(model_path, {}).get("cancelled"):
-                if local_path.exists():
+                # Clean up temp file
+                if temp_download_path.exists():
                     try:
-                        local_path.unlink()
-                        print(f"🗑️ Removed cancelled download: {local_path}")
+                        temp_download_path.unlink()
+                        print(f"🗑️ Removed cancelled temp file: {temp_download_path}")
                     except OSError as e:
-                        print(f"Error removing cancelled download {local_path}: {e}")
+                        print(f"Error removing cancelled temp file {temp_download_path}: {e}")
                 
                 global_models_progress_store[model_path] = {
                     "progress": 0,
@@ -266,36 +311,62 @@ class GlobalModelsManager:
                 return False
 
             if success:
-                # Get final file size
-                final_size = 0
-                if local_path.exists():
-                    final_size = local_path.stat().st_size
-                    print(f"✅ Download complete: {model_path} ({final_size} bytes)")
+                # Check for cancellation before moving file
+                if self.active_downloads.get(model_path, {}).get("cancelled"):
+                    # Clean up temp file
+                    if temp_download_path.exists():
+                        temp_download_path.unlink()
+                    return False
                 
-                # Register the model with the configuration manager
-                if MODEL_CONFIG_AVAILABLE:
-                    try:
-                        model_config_manager.register_s3_model(
-                            local_path=str(local_path),
-                            s3_path=s3_full_path,
-                            model_name=filename,
-                            model_type=category
-                        )
-                        print(f"📝 Model registered in config: {model_path}")
-                    except Exception as e:
-                        print(f"⚠️ Failed to register model in config: {e}")
-                
-                # Mark as completed with success message
-                global_models_progress_store[model_path] = {
-                    "progress": 100, 
-                    "status": "downloaded",
-                    "total_size": total_size or final_size,
-                    "downloaded_size": final_size,
-                    "message": "✅ Download complete!"
-                }
-                return True
+                # Move from temp to final location
+                try:
+                    if self.move_temp_to_final(temp_download_path, local_path, model_path):
+                        # Get final file size
+                        final_size = 0
+                        if local_path.exists():
+                            final_size = local_path.stat().st_size
+                            print(f"✅ Download complete: {model_path} ({final_size} bytes)")
+                        
+                        # Register the model with the configuration manager
+                        if MODEL_CONFIG_AVAILABLE:
+                            try:
+                                model_config_manager.register_s3_model(
+                                    local_path=str(local_path),
+                                    s3_path=s3_full_path,
+                                    model_name=filename,
+                                    model_type=category
+                                )
+                                print(f"📝 Model registered in config: {model_path}")
+                            except Exception as e:
+                                print(f"⚠️ Failed to register model in config: {e}")
+                        
+                        # Mark as completed with success message
+                        global_models_progress_store[model_path] = {
+                            "progress": 100, 
+                            "status": "downloaded",
+                            "total_size": total_size or final_size,
+                            "downloaded_size": final_size,
+                            "message": "✅ Download complete!"
+                        }
+                        return True
+                    else:
+                        # Move failed, clean up temp file
+                        self.cleanup_temp_file(temp_download_path)
+                        return False
+                except Exception as e:
+                    print(f"Error moving temp file to final location: {e}")
+                    self.cleanup_temp_file(temp_download_path)
+                    return False
             else:
                 print(f"❌ Download failed: {model_path}")
+                # Clean up temp file on failure
+                if temp_download_path.exists():
+                    try:
+                        temp_download_path.unlink()
+                        print(f"🗑️ Removed failed temp file: {temp_download_path}")
+                    except OSError as e:
+                        print(f"Error removing failed temp file {temp_download_path}: {e}")
+                
                 global_models_progress_store[model_path] = {
                     "progress": 0, 
                     "status": "failed", 
@@ -303,18 +374,18 @@ class GlobalModelsManager:
                     "downloaded_size": 0,
                     "message": "❌ Download failed"
                 }
-                
-                # Clean up failed download
-                if local_path.exists():
-                    try:
-                        local_path.unlink()
-                        print(f"🗑️ Removed failed download: {local_path}")
-                    except OSError as e:
-                        print(f"Error cleaning up failed download {local_path}: {e}")
                 return False
                 
         except Exception as e:
             print(f"💥 Error downloading model {model_path}: {e}")
+            # Clean up temp file on exception
+            if 'temp_download_path' in locals() and temp_download_path.exists():
+                try:
+                    temp_download_path.unlink()
+                    print(f"🗑️ Removed temp file after error: {temp_download_path}")
+                except OSError as cleanup_error:
+                    print(f"Error removing temp file {temp_download_path}: {cleanup_error}")
+            
             global_models_progress_store[model_path] = {
                 "progress": 0, 
                 "status": "failed", 
@@ -328,8 +399,8 @@ class GlobalModelsManager:
             if model_path in self.active_downloads:
                 del self.active_downloads[model_path]
 
-    async def _download_with_boto3(self, model_path, s3_full_path, local_path, total_size):
-        """Download using boto3 with real-time progress callbacks"""
+    async def _download_with_boto3(self, model_path, s3_full_path, temp_path, total_size):
+        """Download using boto3 with real-time progress callbacks to temporary file"""
         try:
             # Parse S3 path
             parts = s3_full_path.replace("s3://", "").split('/', 1)
@@ -345,7 +416,7 @@ class GlobalModelsManager:
             # Create async wrapper for download
             def do_download():
                 try:
-                    with open(local_path, 'wb') as f:
+                    with open(temp_path, 'wb') as f:
                         self.s3_client.download_fileobj(
                             bucket, key, f, 
                             Callback=progress_callback
@@ -379,10 +450,10 @@ class GlobalModelsManager:
             print(f"Error in boto3 download: {e}")
             return False
 
-    async def _download_with_aws_cli(self, model_path, s3_full_path, local_path, total_size):
-        """Fallback download using AWS CLI with file size monitoring"""
+    async def _download_with_aws_cli(self, model_path, s3_full_path, temp_path, total_size):
+        """Fallback download using AWS CLI with file size monitoring to temporary file"""
         try:
-            command = ['aws', 's3', 'cp', s3_full_path, str(local_path)]
+            command = ['aws', 's3', 'cp', s3_full_path, str(temp_path)]
             print(f"📥 Using AWS CLI: {' '.join(command)}")
 
             # Create async wrapper for AWS CLI
@@ -396,7 +467,7 @@ class GlobalModelsManager:
 
             # Start download and monitoring
             download_task = asyncio.create_task(do_download())
-            monitor_task = asyncio.create_task(self._monitor_progress(model_path, local_path, total_size))
+            monitor_task = asyncio.create_task(self._monitor_progress(model_path, temp_path, total_size))
 
             # Wait for download with cancellation support
             while not download_task.done():
@@ -423,8 +494,8 @@ class GlobalModelsManager:
             print(f"Error in AWS CLI download: {e}")
             return False
 
-    async def _monitor_progress(self, model_path, local_path, total_size):
-        """Monitor download progress by watching file size changes (fallback for AWS CLI)"""
+    async def _monitor_progress(self, model_path, temp_path, total_size):
+        """Monitor download progress by watching temp file size changes (fallback for AWS CLI)"""
         if not total_size or total_size == 0:
             total_size = 1024 * 1024 * 100  # Assume 100MB as default
         
@@ -439,8 +510,8 @@ class GlobalModelsManager:
                     break
                 
                 current_size = 0
-                if local_path.exists():
-                    current_size = local_path.stat().st_size
+                if temp_path.exists():
+                    current_size = temp_path.stat().st_size
                 
                 # Calculate progress percentage
                 if total_size > 0:

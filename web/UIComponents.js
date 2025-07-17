@@ -321,7 +321,7 @@ export class UIComponents {
             
             return `
                 <div class="fs-global-model-name" style="flex: 1;">
-                    <span class="fs-item-name">${item.name}</span>
+                    <span data-name-model-path="${modelPath}" class="fs-item-name">${item.name}</span>
                     <button class="fs-download-btn" data-model-path="${modelPath}" data-full-path="${item.path}" title="Download ${item.name} from global storage">
                         📥 Download
                     </button>
@@ -384,9 +384,9 @@ export class UIComponents {
             return;
         }
         
-        const downloadBtn = modal.querySelector(`[data-model-path="${modelPath}"]`);
+        let downloadBtn = modal.querySelector(`[data-model-path="${modelPath}"]`);
         if (!downloadBtn) {
-            console.warn('Download button not found for model:', modelPath);
+            downloadBtn = modal.querySelector(`[data-name-model-path="${modelPath}"]`);
             return;
         }
         
