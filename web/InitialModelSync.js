@@ -259,6 +259,100 @@ export class InitialModelsSyncDialog {
         this.syncBtn.addEventListener('click', () => this.startSync());
         // this.cancelBtn.addEventListener('click', () => this.cancelSync());
         this.retryFailedBtn.addEventListener('click', () => this.retryFailedDownloads());
+        
+        // Add backdrop click handler to prevent closing during downloads
+        this.overlay.addEventListener('click', (e) => {
+            if (e.target === this.overlay) {
+                this.handleBackdropClick();
+            }
+        });
+        
+        // Add ESC key handler
+        this.handleKeyDown = (e) => {
+            if (e.key === 'Escape' && this.isVisible) {
+                this.handleBackdropClick();
+            }
+        };
+        
+        document.addEventListener('keydown', this.handleKeyDown);
+    }
+
+    handleBackdropClick() {
+        // Check if downloads are in progress
+        if (this.syncInProgress) {
+            this.showNotificationMessage('Cannot close while downloads are in progress. Please wait for downloads to complete or use the Skip button.', true);
+            return;
+        }
+        
+        // If no downloads in progress, allow closing
+        this.hide();
+    }
+
+    showNotificationMessage(message, isError = false) {
+        // Create a temporary notification element
+        const notification = document.createElement('div');
+        notification.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: ${isError ? '#f8d7da' : '#d4edda'};
+            color: ${isError ? '#721c24' : '#155724'};
+            border: 1px solid ${isError ? '#f5c6cb' : '#c3e6cb'};
+            border-radius: 4px;
+            padding: 12px 16px;
+            max-width: 350px;
+            z-index: 10001;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            font-family: monospace;
+            font-size: 14px;
+            line-height: 1.4;
+            animation: slideIn 0.3s ease-out;
+        `;
+        
+        notification.textContent = message;
+        document.body.appendChild(notification);
+        
+        // Add slide-in animation
+        if (!document.querySelector('#notification-styles')) {
+            const style = document.createElement('style');
+            style.id = 'notification-styles';
+            style.textContent = `
+                @keyframes slideIn {
+                    from {
+                        transform: translateX(100%);
+                        opacity: 0;
+                    }
+                    to {
+                        transform: translateX(0);
+                        opacity: 1;
+                    }
+                }
+                
+                @keyframes slideOut {
+                    from {
+                        transform: translateX(0);
+                        opacity: 1;
+                    }
+                    to {
+                        transform: translateX(100%);
+                        opacity: 0;
+                    }
+                }
+            `;
+            document.head.appendChild(style);
+        }
+        
+        // Auto-remove after 4 seconds
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.style.animation = 'slideOut 0.3s ease-in';
+                setTimeout(() => {
+                    if (notification.parentNode) {
+                        document.body.removeChild(notification);
+                    }
+                }, 300);
+            }
+        }, 4000);
     }
 
     async checkAndShow() {
@@ -976,10 +1070,14 @@ export class InitialModelsSyncDialog {
                 this.retryFailedBtn.style.display = 'none';
                 this.skipBtn.style.display = 'none';
                 
-                alert('Models sync completed successfully!');
-                this.markSyncCompleted().then(() => {
-                    this.hide();
-                });
+                this.showNotificationMessage('Models sync completed successfully!', false);
+                
+                // Auto-hide after a delay
+                setTimeout(() => {
+                    this.markSyncCompleted().then(() => {
+                        this.hide();
+                    });
+                }, 2000);
             }
         } else {
             // Sync was cancelled - hide all statuses
@@ -987,7 +1085,7 @@ export class InitialModelsSyncDialog {
             modelStatuses.forEach(status => {
                 status.style.display = 'none';
             });
-            alert('Sync was cancelled.');
+            this.showNotificationMessage('Sync was cancelled.', true);
         }
     }
 
@@ -1012,6 +1110,31 @@ export class InitialModelsSyncDialog {
     async skipSync() {
         // Check if we're in the failed state by looking for visible retry button
         const hasFailedDownloads = this.retryFailedBtn.style.display === 'inline-block';
+        
+        // If sync is in progress, show different behavior
+        if (this.syncInProgress) {
+            let confirmMessage = 'Downloads are currently in progress. Are you sure you want to skip and cancel all pending downloads?';
+            
+            if (confirm(confirmMessage)) {
+                // Try to cancel the sync first
+                try {
+                    const response = await fetch('/filesystem/initial_sync/cancel', {
+                        method: 'POST'
+                    });
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        this.completeSync(false);
+                    } else {
+                        this.showNotificationMessage(`Failed to cancel sync: ${data.error}`, true);
+                    }
+                } catch (error) {
+                    console.error('Error cancelling sync:', error);
+                    this.showNotificationMessage('Failed to cancel sync. Please try again.', true);
+                }
+            }
+            return;
+        }
         
         let confirmMessage = 'Are you sure you want to skip syncing models? You can sync them later from the file manager.';
         if (hasFailedDownloads) {
@@ -1115,12 +1238,23 @@ export class InitialModelsSyncDialog {
         this.isVisible = true;
         this.overlay.style.display = 'flex';
         document.body.style.overflow = 'hidden';
+        
+        // Ensure ESC key listener is active
+        if (this.handleKeyDown) {
+            document.removeEventListener('keydown', this.handleKeyDown);
+            document.addEventListener('keydown', this.handleKeyDown);
+        }
     }
 
     hide() {
         this.isVisible = false;
         this.overlay.style.display = 'none';
         document.body.style.overflow = '';
+        
+        // Clean up event listeners
+        if (this.handleKeyDown) {
+            document.removeEventListener('keydown', this.handleKeyDown);
+        }
         
         if (this.progressInterval) {
             clearInterval(this.progressInterval);

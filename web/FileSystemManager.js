@@ -76,6 +76,15 @@ export class FileSystemManager {
             }
         });
 
+        // Add ESC key handler
+        this.handleKeyDown = (e) => {
+            if (e.key === 'Escape' && this.modal) {
+                this.closeModal();
+            }
+        };
+        
+        document.addEventListener('keydown', this.handleKeyDown);
+
          modal.addEventListener('globalModelCancel', (e) => {
             this.cancelGlobalModelDownload(e.detail.modelPath);
         });
@@ -112,6 +121,13 @@ export class FileSystemManager {
             }
             this.uploadModal = null;
         }
+        
+        // Clean up upload modal ESC key handler
+        if (this.handleUploadKeyDown) {
+            document.removeEventListener('keydown', this.handleUploadKeyDown);
+            this.handleUploadKeyDown = null;
+        }
+        
         this.stopUploadProgressPolling();
         
         // Clear activeDownloads when closing upload modal
@@ -175,6 +191,15 @@ export class FileSystemManager {
                 this.closeUploadModal();
             }
         });
+
+        // Add ESC key handler for upload modal
+        this.handleUploadKeyDown = (e) => {
+            if (e.key === 'Escape' && this.uploadModal) {
+                this.closeUploadModal();
+            }
+        };
+        
+        document.addEventListener('keydown', this.handleUploadKeyDown);
     }
 
     attachUploadFormInputListeners(modal) {
@@ -247,6 +272,13 @@ export class FileSystemManager {
             }
             this.modal = null;
         }
+        
+        // Clean up ESC key handler
+        if (this.handleKeyDown) {
+            document.removeEventListener('keydown', this.handleKeyDown);
+            this.handleKeyDown = null;
+        }
+        
         this.closeActiveContextMenu();
         if (this.uploadModal) {
             this.closeUploadModal();
@@ -265,6 +297,9 @@ export class FileSystemManager {
         this.currentUploadSessionId = null;
         this.currentUploadType = null;
         this.activeContextMenu = { itemPath: null, element: null };
+        
+        // Remove ESC key handler
+        document.removeEventListener('keydown', this.handleKeyDown);
     }
 
     /**
