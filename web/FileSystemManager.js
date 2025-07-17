@@ -158,7 +158,7 @@ export class FileSystemManager {
             option.addEventListener('click', () => {
                 const type = option.dataset.type;
                 this.currentUploadType = type;
-                let destinationPathText = this.currentPath || "FSM Root";
+                let destinationPathText
 
                 if (this.selectedItems.size === 1) {
                     const selectedPath = Array.from(this.selectedItems)[0];
@@ -319,7 +319,7 @@ export class FileSystemManager {
      * Check if there are any active downloads in progress
      */
     hasActiveDownloads() {
-        return this.currentUploadSessionId !== null || this.activeDownloads.size > 0;
+        return this.currentUploadSessionId !== null || this.activeDownloads.size > 0 && !this.downloadError;
     }
 
     updateBreadcrumb() {
@@ -866,7 +866,11 @@ export class FileSystemManager {
                 extension = extension.replace(/^\./, '');
                 if (!extension) { errors.push('Extension cannot be empty or just a dot.'); extensionInput.classList.add('fs-input-error'); hasError = true; }
             }
-            if (hasError) { UIComponents.showUploadMessage(this.uploadModal, errors.join(' '), true); return; }
+            if (hasError) { 
+                UIComponents.showUploadMessage(this.uploadModal, errors.join(' '), true); 
+                this.downloadError = true; // Set error state to prevent further actions
+                return; 
+            }
 
             uploadData.filename = filename;
             uploadData.extension = extension;
@@ -898,13 +902,18 @@ export class FileSystemManager {
             if (filenameInput && filenameInput.value.trim()) uploadData.filename = filenameInput.value.trim();
         
         } else {
-            if (hasError) { UIComponents.showUploadMessage(this.uploadModal, errors.join(' '), true); return; }
+            if (hasError) { 
+                UIComponents.showUploadMessage(this.uploadModal, errors.join(' '), true); 
+                this.downloadError = true; // Set error state to prevent further actions
+                return; 
+            }
             const commonFilenameInput = this.uploadModal.querySelector('#fs-upload-filename');
             if (commonFilenameInput) uploadData.filename = commonFilenameInput.value.trim();
         }
         
         if (uploadData.path === "") {
             UIComponents.showUploadMessage(this.uploadModal, "Cannot upload to the root. Please select a sub-directory.", true);
+            this.downloadError = true; // Set error state to prevent further actions
             this.setUploadButtonState(true);
             return;
         }
@@ -926,7 +935,7 @@ export class FileSystemManager {
         
         try {
             this.startUploadProgressPolling(sessionId, this.currentUploadType);
-
+            this.downloadError = false; // Reset error state before starting upload
             const response = await api.fetchApi(apiEndpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -938,9 +947,11 @@ export class FileSystemManager {
                 this.stopUploadProgressPolling();
                 if (errorResult.error_type === 'access_restricted') {
                     UIComponents.showUploadMessage(this.uploadModal, errorResult.error, true, true);
+                    this.downloadError = true; // Set error state to prevent further actions
                     if (this.currentUploadType === 'civitai') UIComponents.showCivitAITokenInput(this.uploadModal, true);
                     else UIComponents.showHFTokenInput(this.uploadModal, true);
                 } else {
+                    this.downloadError = true; // Set error state to prevent further actions
                     UIComponents.showUploadMessage(this.uploadModal, errorResult.error || `Request failed: ${response.statusText}`, true);
                 }
                 UIComponents.hideUploadProgress(this.uploadModal);
@@ -959,6 +970,7 @@ export class FileSystemManager {
                 } else {
                     if (result.error_type === 'access_restricted') {
                         UIComponents.showUploadMessage(this.uploadModal, result.error, true, true);
+                        this.downloadError = true; // Set error state to prevent further actions
                         UIComponents.showCivitAITokenInput(this.uploadModal, true);
                     } else {
                         UIComponents.showUploadMessage(this.uploadModal, result.error || 'Upload failed.', true);
@@ -971,6 +983,7 @@ export class FileSystemManager {
         } catch (error) {
             this.stopUploadProgressPolling();
             UIComponents.showUploadMessage(this.uploadModal, `Error starting upload: ${error.message}`, true);
+            this.downloadError = true; // Set error state to prevent further actions
             UIComponents.hideUploadProgress(this.uploadModal);
             this.setUploadButtonState(true);
         }
@@ -990,10 +1003,14 @@ export class FileSystemManager {
             const result = await response.json();
             
             if (result.success) UIComponents.showUploadMessage(this.uploadModal, 'Download cancelled successfully', false);
-            else UIComponents.showUploadMessage(this.uploadModal, `Failed to cancel: ${result.error}`, true);
+            else {
+                 UIComponents.showUploadMessage(this.uploadModal, `Failed to cancel: ${result.error}`, true);
+                this.downloadError = true; // Set error state to prevent further actions
+            }
             
         } catch (error) {
             UIComponents.showUploadMessage(this.uploadModal, `Error cancelling download: ${error.message}`, true);
+            this.downloadError = true; // Set error state to prevent further actions
         }
         
         // Clear activeDownloads when cancelling
@@ -1038,19 +1055,23 @@ export class FileSystemManager {
                     } else if (progress.status === 'cancelled') {
                         UIComponents.showUploadMessage(this.uploadModal, `🚫 ${progress.message}`, false);
                         this.setUploadButtonState(true);
+                        this.activeDownloads.clear(); // Clear active downloads on cancel
                     } else if (progress.status === 'access_restricted') {
                         UIComponents.showUploadMessage(this.uploadModal, progress.message, true, true);
+                        this.activeDownloads.clear(); // Clear active downloads on access restricted
                         if (uploadType === 'civitai') UIComponents.showCivitAITokenInput(this.uploadModal, true);
                         else UIComponents.showHFTokenInput(this.uploadModal, true);
                         this.setUploadButtonState(true);
                     } else { 
                         UIComponents.showUploadMessage(this.uploadModal, `❌ ${progress.message || 'An error occurred.'}`, true);
                         this.setUploadButtonState(true);
+                        this.downloadError = true; // Set error state to prevent further actions
                     }
                 }
             } catch (err) {
                 console.error('Error polling upload progress:', err);
                 UIComponents.showUploadMessage(this.uploadModal, 'Error checking progress.', true);
+                this.downloadError = true; // Set error state to prevent further actions
                 this.setUploadButtonState(true);
                 this.stopUploadProgressPolling();
             }
@@ -1725,11 +1746,71 @@ export class FileSystemManager {
     }
 
     showNotificationMessage(message, isError = false) {
+        // Add styles if they don't exist
+        this.addNotificationStyles();
+        
         const notification = document.createElement('div');
         notification.className = `fs-notification-message ${isError ? 'fs-error' : 'fs-success'}`;
         notification.textContent = message;
         document.body.appendChild(notification);
         setTimeout(() => { if (notification.parentNode) notification.remove(); }, 3000);
+    }
+
+    addNotificationStyles() {
+        if (document.querySelector('#fs-notification-styles')) return;
+        
+        const style = document.createElement('style');
+        style.id = 'fs-notification-styles';
+        style.textContent = `
+            .fs-notification-message {
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                z-index: 10001;
+                padding: 12px 16px;
+                border-radius: 6px;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                font-size: 14px;
+                font-weight: 500;
+                max-width: 400px;
+                word-wrap: break-word;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+                transform: translateX(100%);
+                animation: slideIn 0.3s ease-out forwards;
+                opacity: 0;
+                animation: fadeInSlide 0.3s ease-out forwards;
+            }
+            
+            .fs-notification-message.fs-success {
+                background: #10b981;
+                color: white;
+                border-left: 4px solid #059669;
+            }
+            
+            .fs-notification-message.fs-error {
+                background: #ef4444;
+                color: white;
+                border-left: 4px solid #dc2626;
+            }
+            
+            @keyframes fadeInSlide {
+                0% {
+                    opacity: 0;
+                    transform: translateX(100%);
+                }
+                100% {
+                    opacity: 1;
+                    transform: translateX(0);
+                }
+            }
+            
+            .fs-notification-message:hover {
+                transform: translateX(0) scale(1.02);
+                transition: transform 0.2s ease-out;
+            }
+        `;
+        
+        document.head.appendChild(style);
     }
 
     async getWorkflowMonitorStatus() {
