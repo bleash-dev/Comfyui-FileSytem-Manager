@@ -755,8 +755,7 @@ export class InitialModelsSyncDialog {
                             const eta = remainingBytes > 0 && avgSpeed > 0 ? remainingBytes / avgSpeed : 0;
                             
                             this.progressDetails.textContent = 
-                                `${simulatedSummary.completedModels}/${simulatedSummary.totalModels} models completed` +
-                                etaText;
+                                `${simulatedSummary.completedModels}/${simulatedSummary.totalModels} models completed`;
                         }
                     }
                     
