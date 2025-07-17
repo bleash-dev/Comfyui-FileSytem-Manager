@@ -1435,7 +1435,7 @@ export class InitialModelsSyncDialog {
             Object.entries(group).forEach(([modelName, model]) => {
                 totalModels++;
                 const status = model.status || 'queued';
-                if (status === 'downloaded') {
+                if (status === 'completed') {
                     completedModels++;
                 }
             });
