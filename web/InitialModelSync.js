@@ -15,7 +15,7 @@ export class InitialModelsSyncDialog {
         
         // Progress simulation configuration
         this.simulatedProgress = {};
-        this.averageDownloadSpeed = 17 * 1024 * 1024; // 17 MB/s in bytes
+        this.averageDownloadSpeed = 80 * 1024 * 1024; // 80 MB/s in bytes
         this.syncStartTime = null;
         this.totalSyncSize = 0;
         this.simulatedOverallProgress = 0;
@@ -754,17 +754,6 @@ export class InitialModelsSyncDialog {
                             const remainingBytes = simulatedSummary.totalSize - simulatedSummary.downloadedSize;
                             const eta = remainingBytes > 0 && avgSpeed > 0 ? remainingBytes / avgSpeed : 0;
                             
-                            let etaText = '';
-                            if (eta > 0 && eta < 86400) {
-                                const hours = Math.floor(eta / 3600);
-                                const minutes = Math.floor((eta % 3600) / 60);
-                                const seconds = Math.floor(eta % 60);
-                                
-                                if (hours > 0) etaText = ` • ETA: ${hours}h ${minutes}m`;
-                                else if (minutes > 0) etaText = ` • ETA: ${minutes}m ${seconds}s`;
-                                else etaText = ` • ETA: ${seconds}s`;
-                            }
-                            
                             this.progressDetails.textContent = 
                                 `${simulatedSummary.completedModels}/${simulatedSummary.totalModels} models completed` +
                                 etaText;
@@ -1306,7 +1295,7 @@ export class InitialModelsSyncDialog {
                     // Start simulating download for this model
                     simulation.isDownloading = true;
                     simulation.startTime = now;
-                } else if (status === 'downloaded' && !simulation.isCompleted) {
+                } else if (status === 'completed' && !simulation.isCompleted) {
                     // Model completed - immediately mark as 100% complete
                     simulation.isCompleted = true;
                     simulation.isDownloading = false;
@@ -1403,7 +1392,7 @@ export class InitialModelsSyncDialog {
             
             let status = 'queued';
             if (simulation.isCompleted) {
-                status = 'downloaded';
+                status = 'completed';
             } else if (simulation.isDownloading) {
                 status = 'progress';
             } else if (simulation.isFailed) {
