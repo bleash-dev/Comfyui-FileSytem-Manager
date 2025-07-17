@@ -640,7 +640,7 @@ export class InitialModelsSyncDialog {
                     
                     // Update overall progress with simulation
                     this.progressFill.style.width = `${simulatedSummary.overallProgress}%`;
-                    this.progressText.textContent = `${simulatedSummary.overallProgress.toFixed(1)}%`;
+                    this.progressText.textContent = `${simulatedSummary.completedModels}/${simulatedSummary.totalModels} models`;
                     
                     // Calculate speed and ETA based on simulation
                     const now = Date.now();
@@ -672,9 +672,7 @@ export class InitialModelsSyncDialog {
                             }
                             
                             this.progressDetails.textContent = 
-                                `${simulatedSummary.completedModels}/${simulatedSummary.totalModels} models • ` +
-                                `${this.formatFileSize(simulatedSummary.downloadedSize)}/${this.formatFileSize(simulatedSummary.totalSize)}` +
-                                (avgSpeed > 0 ? ` • ${this.formatFileSize(avgSpeed)}/s` : '') +
+                                `${simulatedSummary.completedModels}/${simulatedSummary.totalModels} models completed` +
                                 etaText;
                         }
                     }
@@ -691,8 +689,10 @@ export class InitialModelsSyncDialog {
                     // Update queue status with simulation
                     this.updateQueueStatus(simulatedProgress, simulatedSummary);
 
-                    // Check if completed
-                    if (simulatedSummary.completedModels === simulatedSummary.totalModels) {
+                    // Check if completed - either all simulated models are done OR actual API indicates completion
+                    const actuallyCompleted = this.checkActualCompletion(progress);
+                    if (simulatedSummary.completedModels === simulatedSummary.totalModels || actuallyCompleted) {
+                        console.log(`Sync completion detected: simulated=${simulatedSummary.completedModels}/${simulatedSummary.totalModels}, actuallyCompleted=${actuallyCompleted}`);
                         this.completeSync();
                     }
                 }
@@ -854,7 +854,7 @@ export class InitialModelsSyncDialog {
                         // For completed models, always show 100% progress
                         progressFill.style.width = '100%';
                         progressFill.classList.add('completed');
-                        progressText.textContent = `✓ Complete (${this.formatFileSize(totalBytes)})`;
+                        progressText.textContent = `✓ Complete`;
                         console.log(`Model ${modelName} progress bar set to 100%`);
                         
                         // Ensure the completion animation is visible
@@ -865,7 +865,7 @@ export class InitialModelsSyncDialog {
                         // For downloading models, show simulated progress
                         progressFill.classList.remove('completed');
                         progressFill.style.width = `${progress}%`;
-                        progressText.textContent = `${this.formatFileSize(downloadedBytes)} / ${this.formatFileSize(totalBytes)} (${progress.toFixed(1)}%)`;
+                        progressText.textContent = `Downloading...`;
                     }
                 } else {
                     progressDiv.style.display = 'none';
@@ -1139,6 +1139,9 @@ export class InitialModelsSyncDialog {
     updateSimulationFromActualProgress(actualProgress) {
         const now = Date.now();
         
+        // Check if all models are completed according to API
+        const allCompleted = this.checkActualCompletion(actualProgress);
+        
         // Start downloading models that are actually in progress
         Object.entries(actualProgress || {}).forEach(([groupName, group]) => {
             Object.entries(group).forEach(([modelName, model]) => {
@@ -1170,7 +1173,7 @@ export class InitialModelsSyncDialog {
                     simulation.isDownloading = true;
                     simulation.startTime = now;
                 } else if (status === 'downloaded' && !simulation.isCompleted) {
-                    // Model completed - animate to 100% over 500ms for smooth completion
+                    // Model completed - immediately mark as 100% complete
                     simulation.isCompleted = true;
                     simulation.isDownloading = false;
                     simulation.progress = 100;
@@ -1188,25 +1191,39 @@ export class InitialModelsSyncDialog {
             });
         });
         
-        // Update simulation progress for downloading models
-        Object.values(this.simulatedProgress).forEach(simulation => {
-            if (simulation.isDownloading && !simulation.isCompleted && simulation.startTime) {
-                const elapsedTime = now - simulation.startTime;
-                const expectedDownloaded = Math.min(
-                    (elapsedTime / 1000) * this.averageDownloadSpeed,
-                    simulation.modelSize
-                );
-                
-                simulation.downloadedBytes = expectedDownloaded;
-                simulation.progress = (expectedDownloaded / simulation.modelSize) * 100;
-                
-                // Cap at 95% to avoid completing before actual completion
-                if (simulation.progress > 95) {
-                    simulation.progress = 95;
-                    simulation.downloadedBytes = simulation.modelSize * 0.95;
+        // If all models are completed according to API, mark all simulations as completed
+        if (allCompleted) {
+            Object.values(this.simulatedProgress).forEach(simulation => {
+                if (!simulation.isCompleted && !simulation.isFailed) {
+                    simulation.isCompleted = true;
+                    simulation.isDownloading = false;
+                    simulation.progress = 100;
+                    simulation.downloadedBytes = simulation.modelSize;
+                    simulation.completionTime = now;
+                    console.log(`Force completing model ${simulation.modelName} due to API completion`);
                 }
-            }
-        });
+            });
+        } else {
+            // Update simulation progress for downloading models only if not all completed
+            Object.values(this.simulatedProgress).forEach(simulation => {
+                if (simulation.isDownloading && !simulation.isCompleted && simulation.startTime) {
+                    const elapsedTime = now - simulation.startTime;
+                    const expectedDownloaded = Math.min(
+                        (elapsedTime / 1000) * this.averageDownloadSpeed,
+                        simulation.modelSize
+                    );
+                    
+                    simulation.downloadedBytes = expectedDownloaded;
+                    simulation.progress = (expectedDownloaded / simulation.modelSize) * 100;
+                    
+                    // Cap at 95% to avoid completing before actual completion
+                    if (simulation.progress > 95) {
+                        simulation.progress = 95;
+                        simulation.downloadedBytes = simulation.modelSize * 0.95;
+                    }
+                }
+            });
+        }
     }
 
     getSimulatedSummary() {
@@ -1224,7 +1241,12 @@ export class InitialModelsSyncDialog {
             }
         });
         
-        const overallProgress = totalSize > 0 ? (downloadedSize / totalSize) * 100 : 0;
+        // If all models are completed, ensure 100% progress
+        let overallProgress = totalSize > 0 ? (downloadedSize / totalSize) * 100 : 0;
+        if (completedModels === totalModels && totalModels > 0) {
+            overallProgress = 100;
+            downloadedSize = totalSize; // Ensure download size matches total size
+        }
         
         return {
             totalModels,
@@ -1264,6 +1286,31 @@ export class InitialModelsSyncDialog {
         });
         
         return simulatedProgress;
+    }
+
+    checkActualCompletion(actualProgress) {
+        // Check if all models in the actual progress are completed
+        if (!actualProgress || Object.keys(actualProgress).length === 0) {
+            return false;
+        }
+        
+        let totalModels = 0;
+        let completedModels = 0;
+        
+        Object.entries(actualProgress).forEach(([groupName, group]) => {
+            Object.entries(group).forEach(([modelName, model]) => {
+                totalModels++;
+                const status = model.status || 'queued';
+                if (status === 'downloaded') {
+                    completedModels++;
+                }
+            });
+        });
+        
+        // Return true if we have models and all are completed
+        const allCompleted = totalModels > 0 && completedModels === totalModels;
+        console.log(`Actual completion check: ${completedModels}/${totalModels} models completed, allCompleted=${allCompleted}`);
+        return allCompleted;
     }
 }
 

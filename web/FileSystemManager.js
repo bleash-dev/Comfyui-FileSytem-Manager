@@ -100,6 +100,12 @@ export class FileSystemManager {
     }
 
     closeUploadModal() {
+        // Check if there are active downloads and prevent closing
+        if (this.hasActiveDownloads()) {
+            this.showNotificationMessage('Cannot close while downloads are in progress. Please wait for downloads to complete or cancel them first.', true);
+            return;
+        }
+        
         if (this.uploadModal) {
             if (this.uploadModal.parentNode === document.body) { // Check if it's still in the DOM
                 document.body.removeChild(this.uploadModal);
@@ -107,6 +113,11 @@ export class FileSystemManager {
             this.uploadModal = null;
         }
         this.stopUploadProgressPolling();
+        
+        // Clear activeDownloads when closing upload modal
+        this.activeDownloads.clear();
+        this.currentUploadSessionId = null;
+        this.currentUploadType = null;
     }
 
     setUploadButtonState(enabled) {
@@ -224,6 +235,12 @@ export class FileSystemManager {
     }
 
     closeModal() {
+        // Check if there are active downloads and prevent closing
+        if (this.hasActiveDownloads()) {
+            this.showNotificationMessage('Cannot close while downloads are in progress. Please wait for downloads to complete or cancel them first.', true);
+            return;
+        }
+        
         if (this.modal) {
             if (this.modal.parentNode === document.body) { // Check if it's still in the DOM
                  document.body.removeChild(this.modal);
@@ -248,6 +265,26 @@ export class FileSystemManager {
         this.currentUploadSessionId = null;
         this.currentUploadType = null;
         this.activeContextMenu = { itemPath: null, element: null };
+    }
+
+    /**
+     * Check if a file is currently being downloaded
+     */
+    isFileBeingDownloaded(item) {
+        // Check if there's an active upload session that could be downloading to this file's location
+        if (this.currentUploadSessionId && this.currentUploadType) {
+            return true; // If there's any active download session, be cautious
+        }
+        
+        // Check if the file path is in active downloads
+        return this.activeDownloads.has(item.path);
+    }
+
+    /**
+     * Check if there are any active downloads in progress
+     */
+    hasActiveDownloads() {
+        return this.currentUploadSessionId !== null || this.activeDownloads.size > 0;
     }
 
     updateBreadcrumb() {
@@ -426,8 +463,8 @@ export class FileSystemManager {
             if (item.type === 'file') {
                 actions.push({ id: 'download', label: 'Download', icon: '⬇️' });
                 
-                // Add symlink option for files in models directory
-                if (item.path.startsWith('models/') && item.local_exists) {
+                // Add symlink option for files in models directory that are fully downloaded
+                if (item.path.startsWith('models/') && item.local_exists && !this.isFileBeingDownloaded(item)) {
                     actions.push({ id: 'create_symlink', label: 'Create Symlink', icon: '🔗' });
                 }
             }
@@ -842,6 +879,16 @@ export class FileSystemManager {
         this.currentUploadSessionId = sessionId;
         uploadData.session_id = sessionId;
         
+        // Track this download in activeDownloads with the actual target file path
+        let targetPath = uploadData.path;
+        if (uploadData.filename) {
+            targetPath = `${uploadData.path}/${uploadData.filename}`;
+        } else {
+            // For downloads without explicit filename, we'll track the directory
+            targetPath = uploadData.path;
+        }
+        this.activeDownloads.add(targetPath);
+        
         try {
             this.startUploadProgressPolling(sessionId, this.currentUploadType);
 
@@ -914,6 +961,9 @@ export class FileSystemManager {
             UIComponents.showUploadMessage(this.uploadModal, `Error cancelling download: ${error.message}`, true);
         }
         
+        // Clear activeDownloads when cancelling
+        this.activeDownloads.clear();
+        
         this.stopUploadProgressPolling();
         UIComponents.hideUploadProgress(this.uploadModal);
         this.setUploadButtonState(true);
@@ -942,6 +992,10 @@ export class FileSystemManager {
 
                 if (['completed', 'error', 'access_restricted', 'cancelled'].includes(progress.status)) {
                     this.stopUploadProgressPolling();
+                    
+                    // Clear the download from activeDownloads when finished
+                    this.activeDownloads.clear();
+                    
                     if (progress.status === 'completed') {
                         UIComponents.showUploadMessage(this.uploadModal, `✅ ${progress.message}`, false);
                         this.setUploadButtonState(false);
@@ -1069,6 +1123,18 @@ export class FileSystemManager {
     async showSymlinkDialog(sourceItem) {
         if (!this.modal) return;
         
+        // Check if the source file is fully downloaded and available
+        if (!sourceItem.local_exists) {
+            this.showNotificationMessage('Cannot create symlink: Source file does not exist locally.', true);
+            return;
+        }
+        
+        // Check if the source file is currently being downloaded
+        if (this.isFileBeingDownloaded(sourceItem)) {
+            this.showNotificationMessage('Cannot create symlink: Source file is currently being downloaded. Please wait for the download to complete.', true);
+            return;
+        }
+        
         // Create symlink dialog
         const dialog = document.createElement('div');
         dialog.className = 'fs-symlink-dialog-overlay';
@@ -1128,7 +1194,7 @@ export class FileSystemManager {
         
         document.body.appendChild(dialog);
         
-        // Initialize with models directory
+       
         this.selectedTargetPath = 'models';
         await this.loadSymlinkDirectoryContents('models', dialog);
     }
