@@ -13,6 +13,13 @@ export class InitialModelsSyncDialog {
         this.lastProgressUpdate = null;
         this.progressHistory = [];
         
+        // Progress simulation configuration
+        this.simulatedProgress = {};
+        this.averageDownloadSpeed = 17 * 1024 * 1024; // 17 MB/s in bytes
+        this.syncStartTime = null;
+        this.totalSyncSize = 0;
+        this.simulatedOverallProgress = 0;
+        
         this.injectStyles();
         this.createElement();
         this.bindEvents();
@@ -496,7 +503,11 @@ export class InitialModelsSyncDialog {
             const groupName = cb.dataset.group;
             const modelName = cb.dataset.model;
             const modelData = this.models[groupName][modelName];
-            selectedModels.push(modelData);
+            selectedModels.push({
+                ...modelData,
+                groupName: groupName,
+                modelName: modelName
+            });
         });
 
         if (selectedModels.length === 0) {
@@ -520,6 +531,8 @@ export class InitialModelsSyncDialog {
 
             const data = await response.json();
             if (data.success) {
+                // Initialize progress simulation
+                this.initializeProgressSimulation(selectedModels);
                 this.startProgressMonitoring();
             } else {
                 throw new Error(data.error || 'Failed to start sync');
@@ -532,6 +545,37 @@ export class InitialModelsSyncDialog {
             this.updateSyncButtonState();
             this.hideProgress();
         }
+    }
+
+    initializeProgressSimulation(selectedModels) {
+        this.syncStartTime = Date.now();
+        this.simulatedProgress = {};
+        this.totalSyncSize = 0;
+        this.simulatedOverallProgress = 0;
+        
+        // Initialize simulation for each selected model
+        selectedModels.forEach(model => {
+            const modelSize = model.modelSize || 0;
+            this.totalSyncSize += modelSize;
+            
+            // Create simulation entry for this model
+            const groupName = model.groupName || 'default';
+            const modelName = model.modelName || model.name || 'unknown';
+            const modelKey = `${groupName}:::${modelName}`;
+            
+            this.simulatedProgress[modelKey] = {
+                modelSize: modelSize,
+                downloadedBytes: 0,
+                progress: 0,
+                startTime: null,
+                isDownloading: false,
+                isCompleted: false,
+                isFailed: false,
+                estimatedDuration: modelSize / this.averageDownloadSpeed * 1000, // in milliseconds
+                groupName: groupName,
+                modelName: modelName
+            };
+        });
     }
 
     showInitialModelStatuses() {
@@ -573,34 +617,38 @@ export class InitialModelsSyncDialog {
 
                 if (data.success && data.summary) {
                     const { summary, progress } = data;
-                    const overallProgress = summary.overallProgress || 0;
                     
-                    // Update overall progress
-                    this.progressFill.style.width = `${overallProgress}%`;
-                    this.progressText.textContent = `${overallProgress.toFixed(1)}%`;
+                    // Update simulation based on actual progress
+                    this.updateSimulationFromActualProgress(progress);
                     
-                    // Calculate speed and ETA
+                    // Get simulated progress for UI updates
+                    const simulatedSummary = this.getSimulatedSummary();
+                    const simulatedProgress = this.getSimulatedProgress();
+                    
+                    // Update overall progress with simulation
+                    this.progressFill.style.width = `${simulatedSummary.overallProgress}%`;
+                    this.progressText.textContent = `${simulatedSummary.overallProgress.toFixed(1)}%`;
+                    
+                    // Calculate speed and ETA based on simulation
                     const now = Date.now();
                     if (this.lastProgressUpdate) {
-                        const timeElapsed = (now - this.lastProgressUpdate.time) / 1000; // seconds
-                        const bytesDownloaded = summary.downloadedSize - (this.lastProgressUpdate.downloadedSize || 0);
+                        const timeElapsed = (now - this.lastProgressUpdate.time) / 1000;
+                        const bytesDownloaded = simulatedSummary.downloadedSize - (this.lastProgressUpdate.downloadedSize || 0);
                         
                         if (timeElapsed > 0) {
-                            const speed = bytesDownloaded / timeElapsed; // bytes per second
-                            this.progressHistory.push({ time: now, speed, downloadedSize: summary.downloadedSize });
+                            const speed = bytesDownloaded / timeElapsed;
+                            this.progressHistory.push({ time: now, speed, downloadedSize: simulatedSummary.downloadedSize });
                             
-                            // Keep only last 10 measurements for smoothing
                             if (this.progressHistory.length > 10) {
                                 this.progressHistory.shift();
                             }
                             
-                            // Calculate average speed
                             const avgSpeed = this.progressHistory.reduce((sum, p) => sum + p.speed, 0) / this.progressHistory.length;
-                            const remainingBytes = summary.totalSize - summary.downloadedSize;
+                            const remainingBytes = simulatedSummary.totalSize - simulatedSummary.downloadedSize;
                             const eta = remainingBytes > 0 && avgSpeed > 0 ? remainingBytes / avgSpeed : 0;
                             
                             let etaText = '';
-                            if (eta > 0 && eta < 86400) { // Less than 24 hours
+                            if (eta > 0 && eta < 86400) {
                                 const hours = Math.floor(eta / 3600);
                                 const minutes = Math.floor((eta % 3600) / 60);
                                 const seconds = Math.floor(eta % 60);
@@ -611,8 +659,8 @@ export class InitialModelsSyncDialog {
                             }
                             
                             this.progressDetails.textContent = 
-                                `${summary.completedModels}/${summary.totalModels} models • ` +
-                                `${summary.formattedDownloadedSize}/${summary.formattedTotalSize}` +
+                                `${simulatedSummary.completedModels}/${simulatedSummary.totalModels} models • ` +
+                                `${this.formatFileSize(simulatedSummary.downloadedSize)}/${this.formatFileSize(simulatedSummary.totalSize)}` +
                                 (avgSpeed > 0 ? ` • ${this.formatFileSize(avgSpeed)}/s` : '') +
                                 etaText;
                         }
@@ -620,18 +668,18 @@ export class InitialModelsSyncDialog {
                     
                     this.lastProgressUpdate = {
                         time: now,
-                        downloadedSize: summary.downloadedSize,
-                        overallProgress
+                        downloadedSize: simulatedSummary.downloadedSize,
+                        overallProgress: simulatedSummary.overallProgress
                     };
 
-                    // Update individual model statuses
-                    this.updateModelStatuses(progress);
+                    // Update individual model statuses with simulation
+                    this.updateModelStatuses(simulatedProgress);
                     
-                    // Update queue status
-                    this.updateQueueStatus(progress, summary);
+                    // Update queue status with simulation
+                    this.updateQueueStatus(simulatedProgress, simulatedSummary);
 
                     // Check if completed
-                    if (summary.completedModels === summary.totalModels) {
+                    if (simulatedSummary.completedModels === simulatedSummary.totalModels) {
                         this.completeSync();
                     }
                 }
@@ -975,7 +1023,11 @@ export class InitialModelsSyncDialog {
                 const modelData = this.models[groupName][modelName];
                 
                 if (modelData) {
-                    failedModels.push(modelData);
+                    failedModels.push({
+                        ...modelData,
+                        groupName: groupName,
+                        modelName: modelName
+                    });
                     // Reset status to queued
                     this.updateStatusBadge(badge, 'queued');
                     statusDiv.querySelector('.model-progress').style.display = 'none';
@@ -1004,6 +1056,8 @@ export class InitialModelsSyncDialog {
 
             const data = await response.json();
             if (data.success) {
+                // Initialize progress simulation for retry
+                this.initializeProgressSimulation(failedModels);
                 this.startProgressMonitoring();
             } else {
                 throw new Error(data.error || 'Failed to start retry');
@@ -1051,6 +1105,132 @@ export class InitialModelsSyncDialog {
         const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
         const i = Math.floor(Math.log(bytes) / Math.log(k));
         return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
+    updateSimulationFromActualProgress(actualProgress) {
+        const now = Date.now();
+        
+        // Start downloading models that are actually in progress
+        Object.entries(actualProgress || {}).forEach(([groupName, group]) => {
+            Object.entries(group).forEach(([modelName, model]) => {
+                const modelKey = `${groupName}:::${modelName}`;
+                let simulation = this.simulatedProgress[modelKey];
+                
+                // Create simulation entry if it doesn't exist (for models that started downloading)
+                if (!simulation) {
+                    const modelSize = model.totalSize || model.totalBytes || 1024 * 1024; // default 1MB if unknown
+                    simulation = {
+                        modelSize: modelSize,
+                        downloadedBytes: 0,
+                        progress: 0,
+                        startTime: null,
+                        isDownloading: false,
+                        isCompleted: false,
+                        isFailed: false,
+                        estimatedDuration: modelSize / this.averageDownloadSpeed * 1000,
+                        groupName: groupName,
+                        modelName: modelName
+                    };
+                    this.simulatedProgress[modelKey] = simulation;
+                }
+                
+                const status = model.status || 'queued';
+                
+                if (status === 'progress' && !simulation.isDownloading) {
+                    // Start simulating download for this model
+                    simulation.isDownloading = true;
+                    simulation.startTime = now;
+                } else if (status === 'downloaded' && !simulation.isCompleted) {
+                    // Model completed - quickly fill to 100%
+                    simulation.isCompleted = true;
+                    simulation.isDownloading = false;
+                    simulation.progress = 100;
+                    simulation.downloadedBytes = simulation.modelSize;
+                } else if (status === 'failed') {
+                    // Model failed
+                    simulation.isDownloading = false;
+                    simulation.isCompleted = false;
+                    simulation.isFailed = true;
+                }
+            });
+        });
+        
+        // Update simulation progress for downloading models
+        Object.values(this.simulatedProgress).forEach(simulation => {
+            if (simulation.isDownloading && !simulation.isCompleted && simulation.startTime) {
+                const elapsedTime = now - simulation.startTime;
+                const expectedDownloaded = Math.min(
+                    (elapsedTime / 1000) * this.averageDownloadSpeed,
+                    simulation.modelSize
+                );
+                
+                simulation.downloadedBytes = expectedDownloaded;
+                simulation.progress = (expectedDownloaded / simulation.modelSize) * 100;
+                
+                // Cap at 95% to avoid completing before actual completion
+                if (simulation.progress > 95) {
+                    simulation.progress = 95;
+                    simulation.downloadedBytes = simulation.modelSize * 0.95;
+                }
+            }
+        });
+    }
+
+    getSimulatedSummary() {
+        const totalModels = Object.keys(this.simulatedProgress).length;
+        let completedModels = 0;
+        let totalSize = 0;
+        let downloadedSize = 0;
+        
+        Object.values(this.simulatedProgress).forEach(simulation => {
+            totalSize += simulation.modelSize;
+            downloadedSize += simulation.downloadedBytes;
+            
+            if (simulation.isCompleted) {
+                completedModels++;
+            }
+        });
+        
+        const overallProgress = totalSize > 0 ? (downloadedSize / totalSize) * 100 : 0;
+        
+        return {
+            totalModels,
+            completedModels,
+            totalSize,
+            downloadedSize,
+            overallProgress
+        };
+    }
+
+    getSimulatedProgress() {
+        const simulatedProgress = {};
+        
+        Object.entries(this.simulatedProgress).forEach(([modelKey, simulation]) => {
+            const [groupName, modelName] = modelKey.split(':::');
+            
+            if (!simulatedProgress[groupName]) {
+                simulatedProgress[groupName] = {};
+            }
+            
+            let status = 'queued';
+            if (simulation.isCompleted) {
+                status = 'downloaded';
+            } else if (simulation.isDownloading) {
+                status = 'progress';
+            } else if (simulation.isFailed) {
+                status = 'failed';
+            }
+            
+            simulatedProgress[groupName][modelName] = {
+                status: status,
+                downloaded: simulation.downloadedBytes,
+                totalSize: simulation.modelSize,
+                downloadedBytes: simulation.downloadedBytes,
+                totalBytes: simulation.modelSize
+            };
+        });
+        
+        return simulatedProgress;
     }
 }
 
