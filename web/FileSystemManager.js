@@ -319,7 +319,7 @@ export class FileSystemManager {
      * Check if there are any active downloads in progress
      */
     hasActiveDownloads() {
-        return this.currentUploadSessionId !== null || this.activeDownloads.size > 0 && !this.downloadError;
+        return (this.currentUploadSessionId !== null || this.activeDownloads.size > 0) && !this.downloadError;
     }
 
     updateBreadcrumb() {
