@@ -873,6 +873,8 @@ class MissingModelHandler:
             
             # 🆕 STEP 1: Check global models first
             global_result = await self.search_global_models(model_name, session_id)
+            global_download_attempted = False
+            global_download_success = False
 
             print(f"🔍 Global search result: {global_result}")
             
@@ -885,6 +887,7 @@ class MissingModelHandler:
                 print(f"✅ Found model in global storage: {global_result['global_model_path']}")
                 
                 # Try downloading from global storage with node type and field name
+                global_download_attempted = True
                 global_download_result = await self.download_from_global_models(
                     global_result, 
                     target_directory, 
@@ -901,6 +904,7 @@ class MissingModelHandler:
                 
                 # If global download succeeded, return immediately
                 if global_download_result["success"]:
+                    global_download_success = True
                     return global_download_result
                 
                 # Global download failed for other reasons, continue to internet search
@@ -913,18 +917,6 @@ class MissingModelHandler:
             else:
                 print(f"❌ Model not found in global storage, searching internet...")
                 MissingModelProgressTracker.update_progress(session_id, "Not found in global storage, searching internet...", 20)
-                
-                # If global download succeeded, return immediately
-                if global_download_result["success"]:
-                    return global_download_result
-                
-                # Global download failed for other reasons, continue to internet search
-                print(f"⚠️ Global storage download failed: {global_download_result.get('error')}")
-                MissingModelProgressTracker.update_progress(
-                    session_id, 
-                    f"Global storage failed, searching internet: {global_download_result.get('error', 'Unknown error')}", 
-                    20
-                )
  
             # STEP 2: Proceed with internet search (only if global storage failed or model not found)
             # Check for cancellation again before proceeding to internet search
@@ -1116,7 +1108,7 @@ class MissingModelHandler:
             else:
                 # Create detailed error message including global storage attempt
                 error_parts = []
-                if global_result:
+                if global_download_attempted:
                     error_parts.append("Global storage: Download failed")
                 else:
                     error_parts.append("Global storage: Not found")
