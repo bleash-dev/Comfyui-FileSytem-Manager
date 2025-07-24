@@ -245,17 +245,27 @@ class GlobalModelsManager:
                     print(f"Warning: Error checking cache for compression info: {e}")
                     total_size = await self.get_s3_model_size(s3_key)
             else:
-                # No cache - try to detect compression by checking for .tar.zstd version
-                compressed_s3_key = f"{s3_key}.tar.zstd"
-                compressed_size = await self.get_s3_model_size(compressed_s3_key)
+                # No cache - try to detect compression by checking for both formats
+                compressed_s3_key_zstd = f"{s3_key}.tar.zstd"
+                compressed_s3_key_zst = f"{s3_key}.tar.zst"
+                
+                compressed_size = await self.get_s3_model_size(compressed_s3_key_zstd)
                 if compressed_size and compressed_size > 0:
-                    print(f"🗜️ Compressed version detected: {compressed_s3_key}")
-                    actual_s3_key = compressed_s3_key
+                    print(f"🗜️ Compressed version detected: {compressed_s3_key_zstd}")
+                    actual_s3_key = compressed_s3_key_zstd
                     is_compressed = True
                     total_size = compressed_size  # Will show compressed size in progress
                 else:
-                    # Fallback to uncompressed version
-                    total_size = await self.get_s3_model_size(s3_key)
+                    # Try .tar.zst format
+                    compressed_size = await self.get_s3_model_size(compressed_s3_key_zst)
+                    if compressed_size and compressed_size > 0:
+                        print(f"🗜️ Compressed version detected: {compressed_s3_key_zst}")
+                        actual_s3_key = compressed_s3_key_zst
+                        is_compressed = True
+                        total_size = compressed_size  # Will show compressed size in progress
+                    else:
+                        # Fallback to uncompressed version
+                        total_size = await self.get_s3_model_size(s3_key)
             
             if not total_size:
                 print(f"Warning: Could not determine file size for {model_path}")
@@ -482,8 +492,12 @@ class GlobalModelsManager:
                 if obj['type'] == 'file':
                     key = obj['key']
                     if key.endswith('.tar.zstd'):
-                        # This is a compressed file
+                        # This is a compressed file (.tar.zstd)
                         original_key = key[:-9]  # Remove .tar.zstd
+                        compressed_files[original_key] = obj
+                    elif key.endswith('.tar.zst'):
+                        # This is a compressed file (.tar.zst)
+                        original_key = key[:-8]  # Remove .tar.zst
                         compressed_files[original_key] = obj
                     else:
                         # Regular file - add it for now
@@ -1029,4 +1043,19 @@ class GlobalModelsManager:
         except Exception as e:
             print(f"❌ Decompression failed: {e}")
             return False
+
+    def clear_cache(self):
+        """Clear all caches to ensure fresh data retrieval"""
+        self._structure_cache = None
+        self._cache_timestamp = 0
+        
+        # Also clear disk cache if it exists
+        if self.cache_file.exists():
+            try:
+                self.cache_file.unlink()
+                print("🗑️ Cleared disk cache for global models structure")
+            except Exception as e:
+                print(f"⚠️ Failed to clear disk cache: {e}")
+        
+        print("✅ Global models cache cleared")
 

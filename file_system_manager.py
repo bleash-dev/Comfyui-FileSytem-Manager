@@ -1046,6 +1046,17 @@ async def clear_global_model_progress_endpoint(request):
             "error": str(e)
         }, status=500)
 
+@PS.instance.routes.post("/filesystem/clear_global_models_cache")
+async def clear_global_models_cache_endpoint(request):
+    """Clear the global models cache to force fresh data retrieval"""
+    try:
+        if not global_models_manager: 
+            return web.json_response({"success": False, "error": "Global models disabled"}, status=500)
+        
+        global_models_manager.clear_cache()
+        return web.json_response({"success": True, "message": "Global models cache cleared"})
+    except Exception as e: 
+        return web.json_response({"success": False, "error": str(e)}, status=500)
 
 # This function 'update_download_progress' appears twice. Consolidating into one.
 # It also seems to update a generic 'download_progress' dict, which might be different from
