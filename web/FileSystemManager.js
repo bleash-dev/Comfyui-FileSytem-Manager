@@ -319,7 +319,7 @@ export class FileSystemManager {
      * Check if there are any active downloads in progress
      */
     hasActiveDownloads() {
-        return (this.currentUploadSessionId !== null || this.activeDownloads.size > 0) && !this.downloadError;
+        return (this.activeDownloads.size > 0) && !this.downloadError;
     }
 
     updateBreadcrumb() {
@@ -945,6 +945,8 @@ export class FileSystemManager {
             if (!response.ok) {
                 const errorResult = await response.json();
                 this.stopUploadProgressPolling();
+                // Clear activeDownloads on error
+                this.activeDownloads.clear();
                 if (errorResult.error_type === 'access_restricted') {
                     UIComponents.showUploadMessage(this.uploadModal, errorResult.error, true, true);
                     this.downloadError = true; // Set error state to prevent further actions
@@ -966,6 +968,8 @@ export class FileSystemManager {
                 this.stopUploadProgressPolling();
                 if (result.success) {
                     UIComponents.showUploadMessage(this.uploadModal, result.message || 'Upload started successfully.', false);
+                    // Clear activeDownloads on successful upload
+                    this.activeDownloads.clear();
                     if (this.modal) await this.refreshCurrentDirectory(); // Check modal
                 } else {
                     if (result.error_type === 'access_restricted') {
@@ -975,6 +979,8 @@ export class FileSystemManager {
                     } else {
                         UIComponents.showUploadMessage(this.uploadModal, result.error || 'Upload failed.', true);
                     }
+                    // Clear activeDownloads on upload failure
+                    this.activeDownloads.clear();
                     this.setUploadButtonState(true);
                 }
                 UIComponents.hideUploadProgress(this.uploadModal); 
@@ -984,6 +990,8 @@ export class FileSystemManager {
             this.stopUploadProgressPolling();
             UIComponents.showUploadMessage(this.uploadModal, `Error starting upload: ${error.message}`, true);
             this.downloadError = true; // Set error state to prevent further actions
+            // Clear activeDownloads on exception
+            this.activeDownloads.clear();
             UIComponents.hideUploadProgress(this.uploadModal);
             this.setUploadButtonState(true);
         }
@@ -1055,10 +1063,8 @@ export class FileSystemManager {
                     } else if (progress.status === 'cancelled') {
                         UIComponents.showUploadMessage(this.uploadModal, `🚫 ${progress.message}`, false);
                         this.setUploadButtonState(true);
-                        this.activeDownloads.clear(); // Clear active downloads on cancel
                     } else if (progress.status === 'access_restricted') {
                         UIComponents.showUploadMessage(this.uploadModal, progress.message, true, true);
-                        this.activeDownloads.clear(); // Clear active downloads on access restricted
                         if (uploadType === 'civitai') UIComponents.showCivitAITokenInput(this.uploadModal, true);
                         else UIComponents.showHFTokenInput(this.uploadModal, true);
                         this.setUploadButtonState(true);
@@ -1072,6 +1078,8 @@ export class FileSystemManager {
                 console.error('Error polling upload progress:', err);
                 UIComponents.showUploadMessage(this.uploadModal, 'Error checking progress.', true);
                 this.downloadError = true; // Set error state to prevent further actions
+                // Clear activeDownloads on polling error
+                this.activeDownloads.clear();
                 this.setUploadButtonState(true);
                 this.stopUploadProgressPolling();
             }
