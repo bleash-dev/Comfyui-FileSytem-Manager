@@ -88,7 +88,12 @@ class S3ProgressCallback:
     def __call__(self, bytes_amount: int):
         """Called by boto3 during file transfer"""
         self.bytes_transferred += bytes_amount
-        current_time = asyncio.get_event_loop().time()
+        try:
+            current_time = asyncio.get_running_loop().time()
+        except RuntimeError:
+            # Fallback to system time if no event loop
+            import time
+            current_time = time.time()
         
         # Throttle updates to avoid overwhelming the UI
         if current_time - self.last_update >= self.update_interval:
@@ -295,15 +300,23 @@ class S3Client:
                 try:
                     logger.debug(f"Downloading {key} to temporary file: {temp_path}")
                     
-                    # Download using boto3
-                    loop = asyncio.get_event_loop()
-                    await loop.run_in_executor(
-                        None,
-                        lambda: self.client.download_fileobj(
+                    # Download using boto3 in thread pool
+                    # Get the current event loop before entering the executor
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        # Fallback if no running loop
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                    
+                    def download_sync():
+                        """Synchronous download function for thread pool execution"""
+                        return self.client.download_fileobj(
                             bucket_name, key, temp_file,
                             Callback=callback_wrapper
                         )
-                    )
+                    
+                    await loop.run_in_executor(None, download_sync)
                     
                     # Verify download completed successfully
                     temp_file.flush()
@@ -381,15 +394,23 @@ class S3Client:
             
             # Upload file
             with open(local_path, 'rb') as file_obj:
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(
-                    None,
-                    lambda: self.client.upload_fileobj(
+                # Get the current event loop before entering the executor
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    # Fallback if no running loop
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                
+                def upload_sync():
+                    """Synchronous upload function for thread pool execution"""
+                    return self.client.upload_fileobj(
                         file_obj, bucket_name, key,
                         Callback=callback_wrapper,
                         ExtraArgs=upload_args
                     )
-                )
+                
+                await loop.run_in_executor(None, upload_sync)
             
             logger.info(f"✅ Uploaded {local_path} to {key}")
             return True
