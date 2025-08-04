@@ -995,54 +995,76 @@ class GlobalModelsManager:
                 # Method 1: Try using zstd command if available (based on working bash logic)
                 print(f"🔄 Using zstd command for decompression...")
                 
-                # Create temporary output directory for extraction
-                output_dir = Path(output_path).parent
-                
-                # Use subprocess to pipe zstd output directly to tar (like the bash version)
-                zstd_cmd = ['zstd', '-d', '-c', str(temp_compressed)]
-                tar_cmd = ['tar', '-xf', '-', '-C', str(output_dir)]
-                
-                # Run zstd decompression piped to tar extraction
-                zstd_process = subprocess.Popen(zstd_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                tar_process = subprocess.Popen(tar_cmd, stdin=zstd_process.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                
-                # Close zstd stdout in parent process to avoid broken pipe
-                zstd_process.stdout.close()
-                
-                # Wait for both processes to complete
-                tar_output, tar_error = tar_process.communicate()
-                zstd_process.wait()
-                
-                if zstd_process.returncode != 0:
-                    zstd_stderr = zstd_process.stderr.read().decode() if zstd_process.stderr else "Unknown error"
-                    print(f"❌ zstd decompression failed: {zstd_stderr}")
-                    return False
-                
-                if tar_process.returncode != 0:
-                    tar_stderr = tar_error.decode() if tar_error else "Unknown error"
-                    print(f"❌ tar extraction failed: {tar_stderr}")
-                    return False
-                
-                # Find the extracted file in the output directory (should be only one)
-                extracted_files = [f for f in output_dir.iterdir() if f.is_file() and f.name != temp_compressed.name]
-                
-                if not extracted_files:
-                    print(f"❌ No files found after extraction in {output_dir}")
-                    return False
-                
-                if len(extracted_files) > 1:
-                    print(f"⚠️ Multiple files found after extraction, using first one: {[f.name for f in extracted_files]}")
-                
-                extracted_file = extracted_files[0]
-                
-                # Move the extracted file to the expected output path
-                if extracted_file != Path(output_path):
-                    extracted_file.rename(output_path)
-                    print(f"✅ Moved extracted file to: {output_path}")
-                else:
-                    print(f"✅ File extracted to correct location: {output_path}")
-                
-                return True
+                # Create a dedicated temporary directory for extraction to avoid conflicts
+                import tempfile
+                with tempfile.TemporaryDirectory(prefix="decompress_") as temp_extract_dir:
+                    temp_extract_path = Path(temp_extract_dir)
+                    
+                    # Use subprocess to pipe zstd output directly to tar (like the bash version)
+                    zstd_cmd = ['zstd', '-d', '-c', str(temp_compressed)]
+                    tar_cmd = ['tar', '-xf', '-', '-C', str(temp_extract_path)]
+                    
+                    # Run zstd decompression piped to tar extraction
+                    zstd_process = subprocess.Popen(zstd_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    tar_process = subprocess.Popen(tar_cmd, stdin=zstd_process.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    
+                    # Close zstd stdout in parent process to avoid broken pipe
+                    zstd_process.stdout.close()
+                    
+                    # Wait for both processes to complete
+                    tar_output, tar_error = tar_process.communicate()
+                    zstd_process.wait()
+                    
+                    if zstd_process.returncode != 0:
+                        zstd_stderr = zstd_process.stderr.read().decode() if zstd_process.stderr else "Unknown error"
+                        print(f"❌ zstd decompression failed: {zstd_stderr}")
+                        return False
+                    
+                    if tar_process.returncode != 0:
+                        tar_stderr = tar_error.decode() if tar_error else "Unknown error"
+                        print(f"❌ tar extraction failed: {tar_stderr}")
+                        return False
+                    
+                    # Find the extracted files in the dedicated temp directory
+                    extracted_files = [f for f in temp_extract_path.iterdir() if f.is_file()]
+                    
+                    if not extracted_files:
+                        print(f"❌ No files found after extraction in {temp_extract_path}")
+                        return False
+                    
+                    if len(extracted_files) > 1:
+                        print(f"⚠️ Multiple files found after extraction: {[f.name for f in extracted_files]}")
+                        # Try to find the file that looks like the expected output
+                        expected_name = Path(output_path).name
+                        matching_files = [f for f in extracted_files if f.name == expected_name]
+                        if matching_files:
+                            extracted_file = matching_files[0]
+                            print(f"✅ Found expected file: {extracted_file.name}")
+                        else:
+                            # Use the largest file (likely the actual model)
+                            extracted_file = max(extracted_files, key=lambda f: f.stat().st_size)
+                            print(f"✅ Using largest file: {extracted_file.name} ({extracted_file.stat().st_size} bytes)")
+                    else:
+                        extracted_file = extracted_files[0]
+                        print(f"✅ Found single extracted file: {extracted_file.name} ({extracted_file.stat().st_size} bytes)")
+                    
+                    # Ensure the output directory exists
+                    output_path_obj = Path(output_path)
+                    output_path_obj.parent.mkdir(parents=True, exist_ok=True)
+                    
+                    # Copy the extracted file to the expected output path
+                    import shutil
+                    shutil.copy2(extracted_file, output_path)
+                    print(f"✅ Copied extracted file to: {output_path}")
+                    
+                    # Verify the copied file
+                    if output_path_obj.exists():
+                        final_size = output_path_obj.stat().st_size
+                        print(f"✅ Final decompressed file: {final_size} bytes")
+                        return True
+                    else:
+                        print(f"❌ Failed to create output file: {output_path}")
+                        return False
                 
             except (subprocess.CalledProcessError, FileNotFoundError, OSError) as e:
                 print(f"❌ Command-line decompression failed: {e}")
