@@ -4,7 +4,6 @@ import time
 import tempfile
 import tarfile
 import subprocess
-import io
 from pathlib import Path
 from datetime import datetime
 import folder_paths
@@ -993,28 +992,60 @@ class GlobalModelsManager:
             print(f"🔄 Decompressing {temp_compressed.name}...")
             
             try:
-                # Method 1: Try using zstd command if available
-                zstd_process = subprocess.run([
-                    'zstd', '-d', str(temp_compressed), '-c'
-                ], capture_output=True, check=True)
+                # Method 1: Try using zstd command if available (based on working bash logic)
+                print(f"🔄 Using zstd command for decompression...")
                 
-                # Extract tar content
-                with tarfile.open(fileobj=io.BytesIO(zstd_process.stdout), mode='r|') as tar:
-                    # Extract the single file
-                    members = tar.getmembers()
-                    if len(members) != 1:
-                        print(f"❌ Expected 1 file in archive, found {len(members)}")
-                        return False
-                    
-                    member = members[0]
-                    with tar.extractfile(member) as source:
-                        with open(output_path, 'wb') as dest:
-                            dest.write(source.read())
+                # Create temporary output directory for extraction
+                output_dir = Path(output_path).parent
                 
-                print(f"✅ Decompressed to {output_path}")
+                # Use subprocess to pipe zstd output directly to tar (like the bash version)
+                zstd_cmd = ['zstd', '-d', '-c', str(temp_compressed)]
+                tar_cmd = ['tar', '-xf', '-', '-C', str(output_dir)]
+                
+                # Run zstd decompression piped to tar extraction
+                zstd_process = subprocess.Popen(zstd_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                tar_process = subprocess.Popen(tar_cmd, stdin=zstd_process.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                
+                # Close zstd stdout in parent process to avoid broken pipe
+                zstd_process.stdout.close()
+                
+                # Wait for both processes to complete
+                tar_output, tar_error = tar_process.communicate()
+                zstd_process.wait()
+                
+                if zstd_process.returncode != 0:
+                    zstd_stderr = zstd_process.stderr.read().decode() if zstd_process.stderr else "Unknown error"
+                    print(f"❌ zstd decompression failed: {zstd_stderr}")
+                    return False
+                
+                if tar_process.returncode != 0:
+                    tar_stderr = tar_error.decode() if tar_error else "Unknown error"
+                    print(f"❌ tar extraction failed: {tar_stderr}")
+                    return False
+                
+                # Find the extracted file in the output directory (should be only one)
+                extracted_files = [f for f in output_dir.iterdir() if f.is_file() and f.name != temp_compressed.name]
+                
+                if not extracted_files:
+                    print(f"❌ No files found after extraction in {output_dir}")
+                    return False
+                
+                if len(extracted_files) > 1:
+                    print(f"⚠️ Multiple files found after extraction, using first one: {[f.name for f in extracted_files]}")
+                
+                extracted_file = extracted_files[0]
+                
+                # Move the extracted file to the expected output path
+                if extracted_file != Path(output_path):
+                    extracted_file.rename(output_path)
+                    print(f"✅ Moved extracted file to: {output_path}")
+                else:
+                    print(f"✅ File extracted to correct location: {output_path}")
+                
                 return True
                 
-            except (subprocess.CalledProcessError, FileNotFoundError):
+            except (subprocess.CalledProcessError, FileNotFoundError, OSError) as e:
+                print(f"❌ Command-line decompression failed: {e}")
                 # Method 2: Fallback to Python libraries
                 try:
                     import zstandard as zstd
