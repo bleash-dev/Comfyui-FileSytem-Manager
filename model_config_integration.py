@@ -96,6 +96,7 @@ class ModelConfigManager:
                 'checkpoint': 'checkpoints',
                 'checkpoints': 'checkpoints',
                 'diffusion_model': 'diffusion_models',
+                'rembg': 'rembg',
                 'diffusion_models': 'diffusion_models',
                 'unet': 'unet',
                 'vae': 'vae',
@@ -177,6 +178,8 @@ class ModelConfigManager:
             return 'classifiers'
         elif 'diffusers' in local_path:
             return 'diffusers'
+        elif 'rembg' in local_path:
+            return 'rembg'
         
         # Common custom node model directories
         elif any(x in local_path for x in

@@ -141,6 +141,8 @@ class MissingModelHandler:
                 return "models/tokenizers"
             elif 'unet' in node_type_lower:
                 return "models/unet"
+            elif 'rembg' in node_type_lower:
+                return "models/rembg"
             else:
                 return "models/checkpoints"  # Default for unknown node types
         
