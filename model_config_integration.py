@@ -286,8 +286,7 @@ class ModelConfigManager:
     def register_s3_model(self, local_path: str, s3_path: str,
                           model_name: str = None,
                           model_type: str = None,
-                          download_link: str = None,
-                          sym_linked_from: str = None) -> bool:
+                          download_link: str = None) -> bool:
         """Register a model downloaded from S3"""
         try:
             group = self._determine_model_type_from_path(local_path)
@@ -312,8 +311,6 @@ class ModelConfigManager:
                 model_object["modelSize"] = file_size
             if download_link:
                 model_object["downloadUrl"] = download_link
-            if sym_linked_from:
-                model_object["symLinkedFrom"] = sym_linked_from
             
             # Convert to JSON string
             model_json = json.dumps(model_object)
@@ -339,7 +336,7 @@ class ModelConfigManager:
                                 model_name: str = None,
                                 model_type: str = None,
                                 source: str = "internet",
-                                sym_linked_from: str = None) -> bool:
+                                s3_path: str = None) -> bool:
         """Register a model downloaded from the internet
         (HuggingFace, CivitAI, etc.)"""
         try:
@@ -362,8 +359,10 @@ class ModelConfigManager:
             # Add optional fields
             if file_size:
                 model_object["modelSize"] = file_size
-            if sym_linked_from:
-                model_object["symLinkedFrom"] = sym_linked_from
+            
+            # Add S3 path if provided (for synced models)
+            if s3_path and s3_path.strip():
+                model_object["originalS3Path"] = s3_path
             
             # Convert to JSON string
             model_json = json.dumps(model_object)
@@ -374,8 +373,9 @@ class ModelConfigManager:
             success, output = self._run_script_command(command)
             
             if success:
+                s3_info = f" (S3: {s3_path})" if s3_path else ""
                 logger.info(f"Successfully registered internet model: "
-                            f"{local_path} from {source}")
+                            f"{local_path} from {source}{s3_info}")
                 return True
             else:
                 logger.error(f"Failed to register internet model: {output}")
@@ -389,7 +389,7 @@ class ModelConfigManager:
                                    filename: str,
                                    model_type: str = None,
                                    model_name: str = None,
-                                   sym_linked_from: str = None) -> bool:
+                                   s3_path: str = None) -> bool:
         """Register a model downloaded from HuggingFace"""
         download_url = f"https://huggingface.co/{repo_id}"
         if filename:
@@ -418,8 +418,10 @@ class ModelConfigManager:
             model_object["modelSize"] = file_size
         if filename:
             model_object["fileName"] = filename
-        if sym_linked_from:
-            model_object["symLinkedFrom"] = sym_linked_from
+        
+        # Add S3 path if provided (for synced models)
+        if s3_path and s3_path.strip():
+            model_object["originalS3Path"] = s3_path
         
         # Convert to JSON string
         model_json = json.dumps(model_object)
@@ -430,8 +432,9 @@ class ModelConfigManager:
         success, output = self._run_script_command(command)
         
         if success:
+            s3_info = f" (S3: {s3_path})" if s3_path else ""
             logger.info(f"Successfully registered HuggingFace model: "
-                        f"{local_path}")
+                        f"{local_path}{s3_info}")
             return True
         else:
             logger.error(f"Failed to register HuggingFace model: {output}")
@@ -442,7 +445,7 @@ class ModelConfigManager:
                                direct_url: str = None,
                                model_type: str = None,
                                model_name: str = None,
-                               sym_linked_from: str = None) -> bool:
+                               s3_path: str = None) -> bool:
         """Register a model downloaded from CivitAI"""
         if direct_url:
             download_url = direct_url
@@ -476,8 +479,10 @@ class ModelConfigManager:
             model_object["modelId"] = model_id
         if version_id:
             model_object["versionId"] = version_id
-        if sym_linked_from:
-            model_object["symLinkedFrom"] = sym_linked_from
+        
+        # Add S3 path if provided (for synced models)
+        if s3_path and s3_path.strip():
+            model_object["originalS3Path"] = s3_path
         
         # Convert to JSON string
         model_json = json.dumps(model_object)
@@ -488,8 +493,9 @@ class ModelConfigManager:
         success, output = self._run_script_command(command)
         
         if success:
+            s3_info = f" (S3: {s3_path})" if s3_path else ""
             logger.info(f"Successfully registered CivitAI model: "
-                        f"{local_path}")
+                        f"{local_path}{s3_info}")
             return True
         else:
             logger.error(f"Failed to register CivitAI model: {output}")
@@ -498,7 +504,7 @@ class ModelConfigManager:
     def register_google_drive_model(self, local_path: str, drive_url: str,
                                     model_type: str = None,
                                     model_name: str = None,
-                                    sym_linked_from: str = None) -> bool:
+                                    s3_path: str = None) -> bool:
         """Register a model downloaded from Google Drive"""
         if not model_name:
             model_name = self._extract_model_name_from_path(local_path)
@@ -508,13 +514,13 @@ class ModelConfigManager:
             model_name=model_name,
             model_type=model_type,
             source="google_drive",
-            sym_linked_from=sym_linked_from
+            s3_path=s3_path
         )
     
     def register_direct_url_model(self, local_path: str, url: str,
                                   model_type: str = None,
                                   model_name: str = None,
-                                  sym_linked_from: str = None) -> bool:
+                                  s3_path: str = None) -> bool:
         """Register a model downloaded from a direct URL"""
         if not model_name:
             model_name = self._extract_model_name_from_path(local_path)
@@ -524,7 +530,7 @@ class ModelConfigManager:
             model_name=model_name,
             model_type=model_type,
             source="direct_url",
-            sym_linked_from=sym_linked_from
+            s3_path=s3_path
         )
     
     def register_huggingface_repo(self, repo_path: str, repo_id: str,
@@ -769,67 +775,82 @@ class ModelConfigManager:
                                "info. Symlink registration skipped.")
                 return False
             
-            # Determine the registration method based on source model type
+            # Check if model has S3 path regardless of original download source
+            # This handles cases where models from other sources (HuggingFace,
+            # CivitAI, etc.) have been synced to S3 storage
+            s3_path = source_model_info.get("originalS3Path", "")
+            
+            # Determine the registration method:
+            # 1. If model has S3 path (synced), always use S3 registration
+            # 2. Otherwise, use original download source method
             download_source = source_model_info.get("downloadSource",
                                                     "unknown")
-            print(f"Registering symlink model from source: {download_source}, "
-                  f"destination group: {symlink_model_type}")
             
-            # Create symlink model entry based on source model
-            # Use symlink_model_type for all registrations
-            if download_source == "s3":
+            if s3_path and s3_path.strip():
+                # Model has S3 path - use S3 registration regardless of
+                # original source
+                print(f"Registering symlink model with S3 path from source: "
+                      f"{download_source} -> S3, destination group: "
+                      f"{symlink_model_type}")
                 return self.register_s3_model(
                     local_path=symlink_path,
-                    s3_path=source_model_info.get("originalS3Path", ""),
+                    s3_path=s3_path,
                     model_name=source_model_info.get("modelName"),
                     model_type=symlink_model_type,  # Use destination group
-                    download_link=source_model_info.get("downloadUrl"),
-                    sym_linked_from=source_path
-                )
-            elif download_source == "huggingface":
-                return self.register_huggingface_model(
-                    local_path=symlink_path,
-                    repo_id=source_model_info.get("repositoryId", ""),
-                    filename=source_model_info.get("fileName"),
-                    model_name=source_model_info.get("modelName"),
-                    model_type=symlink_model_type,  # Use destination group
-                    sym_linked_from=source_path
-                )
-            elif download_source == "civitai":
-                return self.register_civitai_model(
-                    local_path=symlink_path,
-                    model_id=source_model_info.get("modelId"),
-                    model_name=source_model_info.get("modelName"),
-                    model_type=symlink_model_type,  # Use destination group
-                    sym_linked_from=source_path
-                )
-            elif download_source == "google_drive":
-                return self.register_google_drive_model(
-                    local_path=symlink_path,
-                    drive_url=source_model_info.get("googleDriveUrl", ""),
-                    model_name=source_model_info.get("modelName"),
-                    model_type=symlink_model_type,  # Use destination group
-                    sym_linked_from=source_path
-                )
-            elif download_source == "direct_url":
-                return self.register_direct_url_model(
-                    local_path=symlink_path,
-                    url=source_model_info.get("downloadUrl", ""),
-                    model_name=source_model_info.get("modelName"),
-                    model_type=symlink_model_type,  # Use destination group
-                    sym_linked_from=source_path
+                    download_link=source_model_info.get("downloadUrl")
                 )
             else:
-                # Fallback to internet model registration
-                download_url = source_model_info.get("downloadUrl",
-                                                     "manual_symlink")
-                return self.register_internet_model(
-                    local_path=symlink_path,
-                    download_url=download_url,
-                    model_name=source_model_info.get("modelName"),
-                    model_type=symlink_model_type,  # Use destination group
-                    sym_linked_from=source_path
-                )
+                # No S3 path - use original download source method
+                print(f"Registering symlink model from source: "
+                      f"{download_source}, destination group: "
+                      f"{symlink_model_type}")
+                
+                # Create symlink model entry based on source model
+                # Use symlink_model_type for all registrations
+                if download_source == "huggingface":
+                    return self.register_huggingface_model(
+                        local_path=symlink_path,
+                        repo_id=source_model_info.get("repositoryId", ""),
+                        filename=source_model_info.get("fileName"),
+                        model_name=source_model_info.get("modelName"),
+                        model_type=symlink_model_type,  # Use destination group
+                        s3_path=s3_path  # Pass S3 path if available
+                    )
+                elif download_source == "civitai":
+                    return self.register_civitai_model(
+                        local_path=symlink_path,
+                        model_id=source_model_info.get("modelId"),
+                        model_name=source_model_info.get("modelName"),
+                        model_type=symlink_model_type,  # Use destination group
+                        s3_path=s3_path  # Pass S3 path if available
+                    )
+                elif download_source == "google_drive":
+                    return self.register_google_drive_model(
+                        local_path=symlink_path,
+                        drive_url=source_model_info.get("googleDriveUrl", ""),
+                        model_name=source_model_info.get("modelName"),
+                        model_type=symlink_model_type,  # Use destination group
+                        s3_path=s3_path  # Pass S3 path if available
+                    )
+                elif download_source == "direct_url":
+                    return self.register_direct_url_model(
+                        local_path=symlink_path,
+                        url=source_model_info.get("downloadUrl", ""),
+                        model_name=source_model_info.get("modelName"),
+                        model_type=symlink_model_type,  # Use destination group
+                        s3_path=s3_path  # Pass S3 path if available
+                    )
+                else:
+                    # Fallback to internet model registration
+                    download_url = source_model_info.get("downloadUrl",
+                                                         "manual_symlink")
+                    return self.register_internet_model(
+                        local_path=symlink_path,
+                        download_url=download_url,
+                        model_name=source_model_info.get("modelName"),
+                        model_type=symlink_model_type,  # Use destination group
+                        s3_path=s3_path  # Pass S3 path if available
+                    )
                 
         except Exception as e:
             logger.error(f"Error registering symlink model: {e}")

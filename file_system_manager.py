@@ -587,15 +587,11 @@ class FileSystemManagerAPI:
             # Register the symlink in model config if available
             if MODEL_CONFIG_AVAILABLE and model_config_manager:
                 try:
-                    # Register the symlink model based on source model info
-                    # Use absolute path for source lookup in config
-                    source_absolute_path = str(source_path.resolve())
-
-                    print(f"Registering symlink: {symlink_path} -> {source_path}")
-                    
+                    print(f"Registering symlink: {symlink_path} -> "
+                          f"{source_path}")
                     success = model_config_manager.register_symlink_model(
-                        source_absolute_path,
-                        f'{symlink_path}'
+                        source_path=str(source_path),
+                        symlink_path=str(symlink_path)
                     )
                     if success:
                         print(f"✅ Registered symlink in model config: "

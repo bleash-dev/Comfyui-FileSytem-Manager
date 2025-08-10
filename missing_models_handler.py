@@ -688,7 +688,6 @@ class MissingModelHandler:
                                     s3_path=s3_path,
                                     model_name=global_result['filename'],
                                     model_type=model_type,
-                                    sym_linked_from=str(s3_local_path)
                                 )
                                 if registration_success:
                                     print(f"✅ Registered symlinked model in config: {symlink_path}")
